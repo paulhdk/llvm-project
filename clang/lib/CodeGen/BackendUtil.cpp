@@ -78,6 +78,7 @@
 #include "llvm/Transforms/Scalar/JumpThreading.h"
 #include "llvm/Transforms/Utils/Debugify.h"
 #include "llvm/Transforms/Utils/EntryExitInstrumenter.h"
+#include "llvm/Transforms/Utils/LKMMDependenceAnalysis.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <memory>
 #include <optional>
@@ -952,6 +953,24 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
           [](FunctionPassManager &FPM, OptimizationLevel Level) {
             FPM.addPass(BoundsCheckingPass());
           });
+
+    if (LangOpts.Sanitize.has(SanitizerKind::LKMMDepChecker)) {
+      if (CodeGenOpts.OptimizationLevel == 0) {
+        PB.registerOptimizerLastEPCallback(
+            [](ModulePassManager &MPM, OptimizationLevel Level) {
+              MPM.addPass(AnnotateLKMMDeps());
+            });
+      } else {
+        PB.registerPipelineStartEPCallback(
+            [](ModulePassManager &MPM, OptimizationLevel Level) {
+              MPM.addPass(AnnotateLKMMDeps());
+            });
+        PB.registerOptimizerLastEPCallback(
+            [](ModulePassManager &MPM, OptimizationLevel Level) {
+              MPM.addPass(VerifyLKMMDeps());
+            });
+      }
+    }
 
     // Don't add sanitizers if we are here from ThinLTO PostLink. That already
     // done on PreLink stage.
