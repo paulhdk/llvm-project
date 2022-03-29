@@ -45,7 +45,7 @@ class VerDepHalf;
 // The Annotation Pass
 //===----------------------------------------------------------------------===//
 
-class AnnotateLKMMDeps : public PassInfoMixin<AnnotateLKMMDeps> {
+class LKMMAnnotateDepsPass : public PassInfoMixin<LKMMAnnotateDepsPass> {
 public:
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 };
@@ -54,9 +54,9 @@ public:
 // The Verification Pass
 //===----------------------------------------------------------------------===//
 
-class VerifyLKMMDeps : public PassInfoMixin<VerifyLKMMDeps> {
+class LKMMVerifyDepsPass : public PassInfoMixin<LKMMVerifyDepsPass> {
 public:
-  VerifyLKMMDeps()
+  LKMMVerifyDepsPass()
       : RemappedIDs(std::make_shared<IDReMap>()),
         VerifiedIDs(std::make_shared<std::unordered_set<std::string>>()),
         PrintedBrokenIDs(), PrintedModules() {}
