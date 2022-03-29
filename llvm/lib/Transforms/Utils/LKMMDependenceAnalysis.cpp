@@ -28,14 +28,10 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 
-// TODO add clang support for clang -fsanitize=lkmm
 // TODO strict and relaxed mode
 
 namespace llvm {
 namespace {
-
-#define INTERPROCEDURAL_REC_LIMIT_ANNOTATION 3
-#define INTERPROCEDURAL_REC_LIMIT_VERIFICATION 4
 
 // Represents a map of IDs to (potential) dependency halfs.
 template <typename T> using DepHalfMap = std::unordered_map<std::string, T>;
@@ -712,7 +708,7 @@ protected:
   /// Returns the current limit for interprocedural annotation / verification
   ///
   /// \returns the maximum recursion level
-  unsigned currentLimit() const;
+  constexpr unsigned currentLimit() const;
 
   /// Returns string representation of the full path to an instructions, i.e. a
   /// concatenation of the path of calls the BFS took to discover \p I and the
@@ -1135,8 +1131,8 @@ void PotAddrDepBeg::addAdrDep(std::string PathTo2, Instruction *I2,
   auto ID = getID() + PathTo2;
 
   std::string begin_annotation =
-      "DoitLk: address dep begin," + ID + "," + getPathTo() + ";";
-  std::string end_annotation = "DoitLk: address dep end," + ID + "," + PathTo2 +
+      "LKMMDep: address dep begin," + ID + "," + getPathTo() + ";";
+  std::string end_annotation = "LKMMDep: address dep end," + ID + "," + PathTo2 +
                                "," + std::to_string(FDep) + ";";
 
   I->addAnnotationMetadata(begin_annotation);
@@ -1203,11 +1199,11 @@ void PotCtrlDepBeg::addCtrlDep(std::string PathTo2, Instruction *I2) const {
   auto ID = getID() + PathTo2;
 
   // begin annotation
-  std::string BeginAnnotation = "DoitLk: ctrl dep begin," + ID + "," +
+  std::string BeginAnnotation = "LKMMDep: ctrl dep begin," + ID + "," +
                                 getPathTo() + "," + getPathToBranch() + ";";
 
   std::string EndAnnotation =
-      "DoitLk: ctrl dep end," + ID + "," + PathTo2 + ";";
+      "LKMMDep: ctrl dep end," + ID + "," + PathTo2 + ";";
 
   I->addAnnotationMetadata(BeginAnnotation);
   I2->addAnnotationMetadata(EndAnnotation);
@@ -1329,11 +1325,11 @@ InterprocBFSRes BFSCtx::runInterprocBFS(BasicBlock *FirstBB, CallInst *CallI) {
     llvm_unreachable("Called runInterprocBFS() with no BFSCtx child.");
 }
 
-unsigned BFSCtx::currentLimit() const {
+constexpr unsigned BFSCtx::currentLimit() const {
   if (isa<AnnotCtx>(this))
-    return INTERPROCEDURAL_REC_LIMIT_ANNOTATION;
+    return 3;
   else if (isa<VerCtx>(this))
-    return INTERPROCEDURAL_REC_LIMIT_VERIFICATION;
+    return 4;
   else
     llvm_unreachable("called currentLimit with unhandled subclass.");
 }
@@ -1728,7 +1724,7 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
   for (auto &MDOp : MDAnnotation->operands()) {
     auto CurrentDepHalfStr = cast<MDString>(MDOp.get())->getString();
 
-    if (!CurrentDepHalfStr.contains("DoitLk"))
+    if (!CurrentDepHalfStr.contains("LKMMDep"))
       continue;
 
     SmallVector<std::string, 5> AnnotData;
@@ -1837,7 +1833,7 @@ bool VerCtx::handleCtrlDepID(std::string &ID, Instruction *I,
 // The Annotation Pass
 //===----------------------------------------------------------------------===//
 
-PreservedAnalyses AnnotateLKMMDeps::run(Module &M, ModuleAnalysisManager &AM) {
+PreservedAnalyses LKMMAnnotateDepsPass::run(Module &M, ModuleAnalysisManager &AM) {
   bool InsertedBugs = false;
 
   for (auto &F : M) {
@@ -1900,7 +1896,7 @@ PreservedAnalyses AnnotateLKMMDeps::run(Module &M, ModuleAnalysisManager &AM) {
 // The Verification Pass
 //===----------------------------------------------------------------------===//
 
-PreservedAnalyses VerifyLKMMDeps::run(Module &M, ModuleAnalysisManager &AM) {
+PreservedAnalyses LKMMVerifyDepsPass::run(Module &M, ModuleAnalysisManager &AM) {
   for (auto &F : M) {
     if (F.empty())
       continue;
@@ -1921,7 +1917,7 @@ PreservedAnalyses VerifyLKMMDeps::run(Module &M, ModuleAnalysisManager &AM) {
   return PreservedAnalyses::all();
 }
 
-void VerifyLKMMDeps::printBrokenDeps(VerBFSResult *IBFSRes) {
+void LKMMVerifyDepsPass::printBrokenDeps(VerBFSResult *IBFSRes) {
   auto &BrokenADBs = IBFSRes->BrokenADBs;
   auto &BrokenADEs = IBFSRes->BrokenADEs;
   auto &BrokenCDBs = IBFSRes->BrokenCDBs;
@@ -1954,7 +1950,7 @@ void VerifyLKMMDeps::printBrokenDeps(VerBFSResult *IBFSRes) {
     checkDepPair(VCDBP, BrokenCDEs);
 }
 
-void VerifyLKMMDeps::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
+void LKMMVerifyDepsPass::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
                                     const std::string &ID) {
   std::string DepKindStr{""};
 
