@@ -127,8 +127,8 @@ MODULE_PASS("sanmd-module", SanitizerBinaryMetadataPass())
 MODULE_PASS("memprof-module", ModuleMemProfilerPass())
 MODULE_PASS("poison-checking", PoisonCheckingPass())
 MODULE_PASS("pseudo-probe-update", PseudoProbeUpdatePass())
-MODULE_PASS("annotate-deps", AnnotateLKMMDeps())
-MODULE_PASS("verify-deps", VerifyLKMMDeps())
+MODULE_PASS("lkmm-annotate-deps", LKMMAnnotateDepsPass())
+MODULE_PASS("lkmm-verify-deps", LKMMVerifyDepsPass())
 #undef MODULE_PASS
 
 #ifndef MODULE_PASS_WITH_PARAMS
