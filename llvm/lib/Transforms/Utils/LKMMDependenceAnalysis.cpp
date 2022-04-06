@@ -159,6 +159,18 @@ public:
   /// \returns true if \p this begins at \p I.
   bool beginsAt(Instruction *I) const { return I == this->I; }
 
+  /// Checks whether all DepChains of this PotAddrDepBeg are at a given
+  /// BasicBlock. Useful for interprocedural analysis as it helps determine
+  /// whether this PotAddrDepBeg can be completed as a full dependency in a
+  /// called function.
+  ///
+  /// \param BB the BB to be checked.
+  ///
+  /// \returns true if all DepChains are at \p BB.
+  bool areAllDepChainsAt(BasicBlock *BB) {
+    return DCM.find(BB) != DCM.end() && DCM.size() == 1;
+  };
+
   /// Updates the dep chain map after the BFS has visitied a given BB with a
   /// given succeeding BB.
   ///
@@ -1335,7 +1347,10 @@ constexpr unsigned BFSCtx::currentLimit() const {
 bool BFSCtx::areAllFunctionArgsPartOfAllDepChains(
     PotAddrDepBeg &ADB, CallInst *CallI,
     std::unordered_set<Value *> &DependentArgs) {
-  bool FDep = true;
+  bool FDep = ADB.canBeFullDependency();
+
+  if(!ADB.areAllDepChainsAt(BB))
+    FDep = false;
 
   for (unsigned i = 0; i < CallI->arg_size(); ++i) {
     auto *VCmp = CallI->getArgOperand(i);
