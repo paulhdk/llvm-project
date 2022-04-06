@@ -395,7 +395,8 @@ public:
 protected:
   VerDepHalf(Instruction *I, std::string ParsedID, std::string PathTo,
              std::string ParsedPathTo, DepKind Kind)
-      : DepHalf(I, PathTo, Kind), ParsedID(ParsedID), ParsedPathTo(PathTo) {}
+      : DepHalf(I, PathTo, Kind), ParsedID(ParsedID),
+        ParsedPathTo(ParsedPathTo) {}
 
 private:
   // The ID which identifies the two metadata annotations for this dependency.
