@@ -1623,14 +1623,18 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
   Instruction *InstWithAnnotation = nullptr;
 
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-    if (auto md = I->getMetadata("annotation")) {
-      if (cast<MDString>(md->getOperand(0))
-              ->getString()
-              .contains(AnnotationType) &&
-          (I->getOpcode() == IOpCode)) {
-        InstWithAnnotation = &*I;
-        break;
+    if (auto *md = I->getMetadata("annotation")) {
+      for(auto &op : md->operands()) {
+        if (isa<MDString>(op) &&
+            cast<MDString>(op)->getString().contains(AnnotationType) &&
+            (I->getOpcode() == IOpCode)) {
+          InstWithAnnotation = &*I;
+          break;
+        }
       }
+
+      if(InstWithAnnotation)
+        break;
     }
   }
 
@@ -1642,22 +1646,18 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
 
   auto &InstContext = InstWithAnnotation->getContext();
 
+  auto *BugVal1 = new AllocaInst(Type::getInt32Ty(InstContext), 0,
+                                 std::string("BugVal1"), &*F->begin()->begin());
+
+  auto *BugVal2 = new AllocaInst(Type::getInt32PtrTy(InstContext), 0,
+                                 std::string("BugVal2"), &*F->begin()->begin());
+
+  new StoreInst(ConstantInt::get(Type::getInt32Ty(InstContext), 42),
+                cast<Value>(BugVal1), InstWithAnnotation);
+
+  new StoreInst(BugVal1, cast<Value>(BugVal2), InstWithAnnotation);
+
   if (AnnotationType == "dep begin") {
-    auto *BugVal1 = InstWithAnnotation->getModule()->getOrInsertGlobal(
-        std::string("bugval1_") +
-            std::string(InstWithAnnotation->getFunction()->getName()),
-        Type::getInt32Ty(F->begin()->begin()->getContext()));
-
-    auto *BugVal2 = InstWithAnnotation->getModule()->getOrInsertGlobal(
-        std::string("bugval2_") +
-            std::string(InstWithAnnotation->getFunction()->getName()),
-        Type::getInt32PtrTy(F->begin()->begin()->getContext()));
-
-    new StoreInst(ConstantInt::get(Type::getInt32Ty(InstContext), 1424242424),
-                  cast<Value>(BugVal1), InstWithAnnotation);
-
-    new StoreInst(BugVal1, cast<Value>(BugVal2), InstWithAnnotation);
-
     for (auto InstIt = InstWithAnnotation->getIterator(),
               InstEnd = InstWithAnnotation->getParent()->end();
          InstIt != InstEnd; ++InstIt)
@@ -1670,22 +1670,13 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
     // Replace the source of the store to break the dependency chain.
     InstWithAnnotation->setOperand(0, BugVal2);
   } else {
-    auto *GlobalBugVal = InstWithAnnotation->getModule()->getOrInsertGlobal(
-        std::string("bugval_") +
-            std::string(InstWithAnnotation->getFunction()->getName()),
-        Type::getInt32Ty(F->begin()->begin()->getContext()));
-
-    // Store 42 into Global BugVal just before our annotated load.
-    new StoreInst(ConstantInt::get(Type::getInt32Ty(InstContext), 1424242424),
-                  cast<Value>(GlobalBugVal), InstWithAnnotation);
-
     if (IOpCode == Instruction::Load) {
       // Update the source of our annotated load to be the global BugVal.
-      InstWithAnnotation->setOperand(0, GlobalBugVal);
+      InstWithAnnotation->setOperand(0, BugVal2);
       // Set a new name.
       InstWithAnnotation->setName("new_ending");
     } else
-      InstWithAnnotation->setOperand(1, GlobalBugVal);
+      InstWithAnnotation->setOperand(1, BugVal2);
   }
 }
 
