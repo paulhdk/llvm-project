@@ -1126,9 +1126,6 @@ bool PotAddrDepBeg::belongsToSomeNotAllDepChains(BasicBlock *BB,
 
 void PotAddrDepBeg::addAdrDep(std::string PathTo2, Instruction *I2,
                               bool FDep) const {
-  if (beginsAt(I2))
-    return;
-
   auto ID = getID() + PathTo2;
 
   std::string begin_annotation =
