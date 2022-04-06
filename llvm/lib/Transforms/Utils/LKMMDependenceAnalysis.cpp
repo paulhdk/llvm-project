@@ -1458,9 +1458,9 @@ void BFSCtx::visitCallInst(CallInst &CallI) {
   InterprocBFSRes ret;
 
   if (isa<AnnotCtx>(this))
-    auto ret = runInterprocBFS(&*CalledF->begin(), &CallI);
+    ret = runInterprocBFS(&*CalledF->begin(), &CallI);
   else if (isa<VerCtx>(this))
-    auto ret = runInterprocBFS(&*CalledF->begin(), &CallI);
+    ret = runInterprocBFS(&*CalledF->begin(), &CallI);
 
   auto &RADBsFromCall = ret.first;
   auto &RCDBsFromCall = ret.second;
