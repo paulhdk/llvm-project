@@ -37,8 +37,14 @@ namespace {
 using IDReMap =
     std::unordered_map<std::string, std::unordered_set<std::string>>;
 
-struct VerBFSResult;
+// Represents a map of IDs to (potential) dependency halfs.
+template <typename T> using DepHalfMap = std::unordered_map<std::string, T>;
+
 class VerDepHalf;
+class VerAddrDepBeg;
+class VerAddrDepEnd;
+class VerCtrlDepBeg;
+class VerCtrlDepEnd;
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -56,14 +62,23 @@ public:
 
 class LKMMVerifyDepsPass : public PassInfoMixin<LKMMVerifyDepsPass> {
 public:
-  LKMMVerifyDepsPass()
-      : RemappedIDs(std::make_shared<IDReMap>()),
-        VerifiedIDs(std::make_shared<std::unordered_set<std::string>>()),
-        PrintedBrokenIDs(), PrintedModules() {}
+  LKMMVerifyDepsPass();
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 
 private:
+  // Contains all unverified address dependency beginning annotations.
+  std::shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs;
+
+  // Contains all unverified address dependency ending annotations.
+  std::shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs;
+
+  // Contains all unverified control dependency beginning annotations.
+  std::shared_ptr<DepHalfMap<VerCtrlDepBeg>> BrokenCDBs;
+
+  // Contains all unverified control dependency ending annotations.
+  std::shared_ptr<DepHalfMap<VerCtrlDepEnd>> BrokenCDEs;
+
   std::shared_ptr<IDReMap> RemappedIDs;
 
   std::shared_ptr<std::unordered_set<std::string>> VerifiedIDs;
@@ -73,9 +88,7 @@ private:
   std::unordered_set<Module *> PrintedModules;
 
   /// Prints broken dependencies.
-  ///
-  /// \param BFSRes
-  void printBrokenDeps(VerBFSResult *IBFSRes);
+  void printBrokenDeps();
 
   void printBrokenDep(VerDepHalf &Beg, VerDepHalf &End, const std::string &ID);
 };
