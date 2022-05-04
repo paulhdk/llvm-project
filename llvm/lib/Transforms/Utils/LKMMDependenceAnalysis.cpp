@@ -20,19 +20,40 @@
 
 #include "llvm/Transforms/Utils/LKMMDependenceAnalysis.h"
 #include "llvm/Analysis/CFG.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/Casting.h"
+#include <list>
+#include <queue>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 // TODO strict and relaxed mode
 
 namespace llvm {
 namespace {
+// FIXME Is there a more elegant way of dealing with duplicate IDs (preferably
+// getting eliminating the problem all together)?
+
+// The IDReMap type alias represents the map of IDs to sets of alias IDs which
+// verification contexts use for remapping duplicate IDs. Duplicate IDs appear
+// when an annotated instruction is duplicated as part of optimizations.
+using IDReMap =
+    std::unordered_map<std::string, std::unordered_set<std::string>>;
+
+// Represents a map of IDs to (potential) dependency halfs.
+template <typename T> using DepHalfMap = std::unordered_map<std::string, T>;
+
 // The DepChain type alias reprsents a dependency chain. Even though the term
 // 'chain' suggests ordering, an unordered set fits better here as a), the
 // algorithm doesn't require the dep chain to be ordered, and b), an unordered
@@ -138,7 +159,8 @@ class PotAddrDepBeg : public DepHalf {
 public:
   PotAddrDepBeg(Instruction *I, std::string PathTo, std::string PathToViaFiles,
                 Value *V, bool FDep = true)
-      : PotAddrDepBeg(I, PathTo, PathToViaFiles, DepChain{V}, FDep, I->getParent()) {}
+      : PotAddrDepBeg(I, PathTo, PathToViaFiles, DepChain{V}, FDep,
+                      I->getParent()) {}
 
   PotAddrDepBeg(Instruction *I, std::string PathTo, std::string PathToViaFiles,
                 DepChain DC, bool FDep, BasicBlock *BB)
@@ -266,7 +288,7 @@ public:
   /// \param PathTo2 the path the annotation pass took to discover the
   ///  ending.
   /// \param PathToViaFiles2 Like \p PathTo2, but instead of function names it
-  ///  contains the corresponding file names. 
+  ///  contains the corresponding file names.
   /// \param I2 the instruction where the address dependency ends.
   /// \param FDep set to true if this is a full address
   ///  dependency.
@@ -296,11 +318,11 @@ public:
     return VDH->getKind() == DK_AddrBeg;
   }
 
-  void printDepChainAt(BasicBlock *BB) { 
+  void printDepChainAt(BasicBlock *BB) {
     errs() << "printing DCInter\n";
     for (auto &V : DCM.at(BB).first) {
       V->print(errs());
-      errs() << "\n"  ;
+      errs() << "\n";
     }
   }
 
@@ -384,8 +406,8 @@ public:
   /// Annotates a ctrl dependency from a given ending to this beginning.
   ///
   /// \param PathTo2 the path the annotation pass took to discover \p I2.
-  /// \param PathToViaFiles2 the path the annotation pass took to discover \p I2.
-  /// \param I2 the instruction where the ctrl dependency ends.
+  /// \param PathToViaFiles2 the path the annotation pass took to discover \p
+  /// I2. \param I2 the instruction where the ctrl dependency ends.
   void addCtrlDep(std::string PathTo2, std::string PathToViaFiles2,
                   Instruction *I2) const;
 
@@ -418,7 +440,9 @@ class VerDepHalf : public DepHalf {
 public:
   std::string const &getParsedPathTo() const { return ParsedPathTo; }
 
-  std::string const &getParsedpathTOViaFiles() const { return ParsedPathToViaFiles; }
+  std::string const &getParsedpathTOViaFiles() const {
+    return ParsedPathToViaFiles;
+  }
 
   Instruction *const &getInst() const { return I; };
 
@@ -656,7 +680,7 @@ public:
   void visitReturnInst(ReturnInst &ReturnI);
 
   void visitCallBase(CallBase &CB) {
-    if(isa<CallInst>(CB))
+    if (isa<CallInst>(CB))
       visitCallInst(*dyn_cast<CallInst>(&CB));
   }
 
@@ -779,7 +803,7 @@ protected:
   ///
   /// \param viaFiles set to true if the filename should be used instead of the
   ///  function name
-  /// 
+  ///
   /// \returns a string represenation of \p CallPath.
   std::string convertPathToString(bool viaFiles = false) {
     std::string PathStr{""};
@@ -982,7 +1006,8 @@ private:
   ///  instruction where the ctrl dep ends.
   /// \param ParsedPathTo the CallPath the annotation pass took to discover
   ///  \p I. Expressed in terms of functionName::line:col.
-  /// \param ParsedPathToViaFiles the CallPath the annotation pass took to discover
+  /// \param ParsedPathToViaFiles the CallPath the annotation pass took to
+  /// discover
   ///  \p I. Expressed in terms of filename::line:col.
   ///
   /// \returns true if the ctrl dep could be verified.
@@ -1144,7 +1169,7 @@ bool PotAddrDepBeg::tryAddValueToDepChains(Instruction *I, Value *VCmp,
   if (!isAt(I->getParent()))
     return false;
 
-  if(isa<Constant>(VAdd))
+  if (isa<Constant>(VAdd))
     return false;
 
   auto ret = false;
@@ -1273,7 +1298,8 @@ bool PotCtrlDepBeg::progressCtrlPaths(
   return false;
 }
 
-void PotCtrlDepBeg::addCtrlDep(std::string PathTo2, std::string PathToViaFiles2, Instruction *I2) const {
+void PotCtrlDepBeg::addCtrlDep(std::string PathTo2, std::string PathToViaFiles2,
+                               Instruction *I2) const {
   auto ID = getID() + PathTo2;
 
   std::string BeginAnnotation = "LKMMDep: ctrl dep begin," + ID + "," +
@@ -1418,7 +1444,7 @@ bool BFSCtx::areAllFunctionArgsPartOfAllDepChains(
     std::unordered_set<Value *> &DependentArgs) {
   bool FDep = ADB.canBeFullDependency();
 
-  if(!ADB.areAllDepChainsAt(BB))
+  if (!ADB.areAllDepChainsAt(BB))
     FDep = false;
 
   for (unsigned i = 0; i < CallI->arg_size(); ++i) {
@@ -1504,7 +1530,8 @@ std::string BFSCtx::buildInlineString(Instruction *I) {
 
   while (InlinedAt) {
     // Column.
-    InlinePath = ":" + std::to_string(InlinedAt->getColumn()) + "  " + InlinePath;
+    InlinePath =
+        ":" + std::to_string(InlinedAt->getColumn()) + "  " + InlinePath;
     // Line.
     InlinePath = "::" + std::to_string(InlinedAt->getLine()) + InlinePath;
     // File name.
@@ -1513,7 +1540,7 @@ std::string BFSCtx::buildInlineString(Instruction *I) {
     // Move to next InlinedAt if it exists.
     InlinedAt = InlinedAt->getInlinedAt();
   }
-  
+
   return InlinePath;
 }
 
@@ -1543,7 +1570,7 @@ void BFSCtx::visitCallInst(CallInst &CallI) {
 
   InterprocBFSRes ret;
 
-  //FIXME redundant checks?
+  // FIXME redundant checks?
   if (isa<AnnotCtx>(this))
     ret = runInterprocBFS(&*CalledF->begin(), &CallI);
   else if (isa<VerCtx>(this))
@@ -1705,7 +1732,7 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
 
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     if (auto *md = I->getMetadata("annotation")) {
-      for(auto &op : md->operands()) {
+      for (auto &op : md->operands()) {
         if (isa<MDString>(op) &&
             cast<MDString>(op)->getString().contains(AnnotationType) &&
             (I->getOpcode() == IOpCode)) {
@@ -1714,7 +1741,7 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
         }
       }
 
-      if(InstWithAnnotation)
+      if (InstWithAnnotation)
         break;
     }
   }
@@ -1777,13 +1804,6 @@ bool VerCtx::handleAddrDepID(std::string const &ID, Instruction *I,
     // FIXME condition can be shortened
     if ((ParsedFullDep && ADB.belongsToAllDepChains(BB, VCmp)) ||
         ((!ParsedFullDep && ADB.belongsToDepChain(BB, VCmp)))) {
-      if (StringRef(ID).contains(
-              "khugepaged_scan_file::2069:4  collapse_file::1691:23  "
-              "xas_next::1848:9  xa_entry::1183:9khugepaged_scan_file::2069:4  "
-              "collapse_file::1792:7  PageTransCompound::852:9  "
-              "PageCompound::308:9")) {
-        errs() << "verified ID " << ID << "\n";
-      }
       return true;
     }
 
@@ -1918,11 +1938,45 @@ bool VerCtx::handleCtrlDepID(std::string const &ID, Instruction *I,
 
 } // namespace
 
-//===----------------------------------------------------------------------===//
-// The Annotation Pass
-//===----------------------------------------------------------------------===//
+class LKMMAnnotator {
+public:
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+};
 
-PreservedAnalyses LKMMAnnotateDepsPass::run(Module &M, ModuleAnalysisManager &AM) {
+class LKMMVerifier {
+public:
+  LKMMVerifier();
+
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+
+private:
+  // Contains all unverified address dependency beginning annotations.
+  std::shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs;
+
+  // Contains all unverified address dependency ending annotations.
+  std::shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs;
+
+  // Contains all unverified control dependency beginning annotations.
+  std::shared_ptr<DepHalfMap<VerCtrlDepBeg>> BrokenCDBs;
+
+  // Contains all unverified control dependency ending annotations.
+  std::shared_ptr<DepHalfMap<VerCtrlDepEnd>> BrokenCDEs;
+
+  std::shared_ptr<IDReMap> RemappedIDs;
+
+  std::shared_ptr<std::unordered_set<std::string>> VerifiedIDs;
+
+  std::unordered_set<std::string> PrintedBrokenIDs;
+
+  std::unordered_set<Module *> PrintedModules;
+
+  /// Prints broken dependencies.
+  void printBrokenDeps();
+
+  void printBrokenDep(VerDepHalf &Beg, VerDepHalf &End, const std::string &ID);
+};
+
+PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
   bool InsertedBugs = false;
 
   for (auto &F : M) {
@@ -1983,11 +2037,7 @@ PreservedAnalyses LKMMAnnotateDepsPass::run(Module &M, ModuleAnalysisManager &AM
   return InsertedBugs ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
 
-//===----------------------------------------------------------------------===//
-// The Verification Pass
-//===----------------------------------------------------------------------===//
-
-LKMMVerifyDepsPass::LKMMVerifyDepsPass()
+LKMMVerifier::LKMMVerifier()
     : BrokenADBs(std::make_shared<DepHalfMap<VerAddrDepBeg>>()),
       BrokenADEs(std::make_shared<DepHalfMap<VerAddrDepEnd>>()),
       BrokenCDBs(std::make_shared<DepHalfMap<VerCtrlDepBeg>>()),
@@ -1996,7 +2046,7 @@ LKMMVerifyDepsPass::LKMMVerifyDepsPass()
       VerifiedIDs(std::make_shared<std::unordered_set<std::string>>()),
       PrintedBrokenIDs(), PrintedModules() {}
 
-PreservedAnalyses LKMMVerifyDepsPass::run(Module &M, ModuleAnalysisManager &AM) {
+PreservedAnalyses LKMMVerifier::run(Module &M, ModuleAnalysisManager &AM) {
   for (auto &F : M) {
     if (F.empty())
       continue;
@@ -2010,13 +2060,13 @@ PreservedAnalyses LKMMVerifyDepsPass::run(Module &M, ModuleAnalysisManager &AM) 
 
     VC.runBFS();
   }
-  
+
   printBrokenDeps();
 
   return PreservedAnalyses::all();
 }
 
-void LKMMVerifyDepsPass::printBrokenDeps() {
+void LKMMVerifier::printBrokenDeps() {
   auto checkDepPair = [this](auto &P, auto &E) {
     auto &ID = P.first;
 
@@ -2044,8 +2094,8 @@ void LKMMVerifyDepsPass::printBrokenDeps() {
     checkDepPair(VCDBP, BrokenCDEs);
 }
 
-void LKMMVerifyDepsPass::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
-                                    const std::string &ID) {
+void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
+                                  const std::string &ID) {
   std::string DepKindStr{""};
 
   if (isa<VerAddrDepBeg>(Beg)) {
@@ -2095,10 +2145,30 @@ void LKMMVerifyDepsPass::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
     errs() << "Optimised IR module:\n";
     Beg.getInst()->getModule()->print(errs(), nullptr);
 
-
-
     PrintedModules.insert(Beg.getInst()->getModule());
   }
+}
+
+//===----------------------------------------------------------------------===//
+// The Annotation Pass
+//===----------------------------------------------------------------------===//
+
+PreservedAnalyses LKMMAnnotateDepsPass::run(Module &M,
+                                            ModuleAnalysisManager &AM) {
+  auto A = LKMMAnnotator();
+
+  return A.run(M, AM);
+}
+
+//===----------------------------------------------------------------------===//
+// The Verification Pass
+//===----------------------------------------------------------------------===//
+
+PreservedAnalyses LKMMVerifyDepsPass::run(Module &M,
+                                          ModuleAnalysisManager &AM) {
+  auto V = LKMMVerifier();
+
+  return V.run(M, AM);
 }
 
 } // namespace llvm
