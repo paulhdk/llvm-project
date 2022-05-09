@@ -32,6 +32,7 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLine.h"
 #include <list>
 #include <queue>
 #include <string>
@@ -41,6 +42,13 @@
 // TODO strict and relaxed mode
 
 namespace llvm {
+// Enable tests conditionally via command line opt
+static cl::opt<bool> InjectBugs(
+    "lkmm-enable-tests",
+    cl::desc("Enable the LKMM dependency checker tests. Requires the tests "
+             "to be present in the source tree of the kernel being compiled"),
+    cl::Hidden, cl::init(false));
+
 namespace {
 // FIXME Is there a more elegant way of dealing with duplicate IDs (preferably
 // getting eliminating the problem all together)?
@@ -1988,50 +1996,38 @@ PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
       continue;
     }
 
-    // Check for multiple return statements
-    // auto NumOfRets = 0;
-    // for(auto &BB : F) {
-    //   if(isa<ReturnInst>(BB.getTerminator()))
-    //     NumOfRets++;
-    // }
-
-    // if(NumOfRets > 1) {
-    //   errs() << "more than one return in " << F.getName() << "\n";
-    //   F.print(errs());
-    // }
-
-    // assert(NumOfRets < 2 && "assert failed for more less than one return");
-
     AnnotCtx AC(&*F.begin());
 
     // Annotate dependencies.
     AC.runBFS();
 
-    // Insert bugs if the BFS just annotated a testing function.
-    // if (F.hasName()) {
-    //   auto FName = F.getName();
+    if (InjectBugs) {
+      if (!F.hasName())
+        continue;
 
-    //   // Break beginnings.
-    //   if (FName.contains("doitlk_rr_addr_dep_begin") ||
-    //       FName.contains("doitlk_rw_addr_dep_begin") ||
-    //       FName.contains("doitlk_ctrl_dep_begin")) {
-    //     AC.insertBug(&F, Instruction::Load, "dep begin");
-    //     InsertedBugs = true;
-    //   }
+      auto FName = F.getName();
 
-    //   // Break read -> read addr dep endings.
-    //   else if (FName.contains("doitlk_rr_addr_dep_end")) {
-    //     AC.insertBug(&F, Instruction::Load, "dep end");
-    //     InsertedBugs = true;
-    //   }
+      // Insert bugs if the BFS just annotated a testing function.
+      if (FName.contains("doitlk_rr_addr_dep_begin") ||
+          FName.contains("doitlk_rw_addr_dep_begin") ||
+          FName.contains("doitlk_ctrl_dep_begin")) {
+        AC.insertBug(&F, Instruction::Load, "dep begin");
+        InsertedBugs = true;
+      }
 
-    //   // Break read -> write addr dep and ctrl dep endings.
-    //   else if (FName.contains("doitlk_rw_addr_dep_end") ||
-    //            FName.contains("doitlk_ctrl_dep_end")) {
-    //     AC.insertBug(&F, Instruction::Store, "dep end");
-    //     InsertedBugs = true;
-    //   }
-    // }
+      // Break read -> read addr dep endings.
+      else if (FName.contains("doitlk_rr_addr_dep_end")) {
+        AC.insertBug(&F, Instruction::Load, "dep end");
+        InsertedBugs = true;
+      }
+
+      // Break read -> write addr dep and ctrl dep endings.
+      else if (FName.contains("doitlk_rw_addr_dep_end") ||
+               FName.contains("doitlk_ctrl_dep_end")) {
+        AC.insertBug(&F, Instruction::Store, "dep end");
+        InsertedBugs = true;
+      }
+    }
   }
 
   return InsertedBugs ? PreservedAnalyses::none() : PreservedAnalyses::all();
@@ -2049,10 +2045,6 @@ LKMMVerifier::LKMMVerifier()
 PreservedAnalyses LKMMVerifier::run(Module &M, ModuleAnalysisManager &AM) {
   for (auto &F : M) {
     if (F.empty())
-      continue;
-
-    if (F.getParent()->getName() == "lib/modules/dep_chain_tests.c" &&
-        F.getName() == "init_module")
       continue;
 
     auto VC = VerCtx(&*F.begin(), BrokenADBs, BrokenADEs, BrokenCDBs,
