@@ -1177,7 +1177,7 @@ bool PotAddrDepBeg::tryAddValueToDepChains(Instruction *I, Value *VCmp,
   if (!isAt(I->getParent()))
     return false;
 
-  if (isa<Constant>(VAdd))
+  if (isa<ConstantData>(VAdd))
     return false;
 
   auto ret = false;
