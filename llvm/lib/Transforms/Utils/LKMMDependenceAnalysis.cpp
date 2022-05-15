@@ -322,6 +322,18 @@ public:
     DCM.emplace(BB, DepChainPair(DC, DC));
   }
 
+  /// Resets the DepChainMap
+  void clearDCMap() { DCM.clear(); }
+
+  /// Returns true if the DepChainMap is completely empty. This is useful for
+  /// determining whether a dependency has started in the current function or
+  /// was carried over from a previous function where its dependency chain
+  /// didn't run into any of the function call's arguments, in which case its
+  /// DepChainMap will be completely empty.
+  ///
+  /// \Returns true if the DepChainMap is completely empty.
+  bool isDepChainMapEmpty() { return DCM.empty(); }
+
   static bool classof(const DepHalf *VDH) {
     return VDH->getKind() == DK_AddrBeg;
   }
@@ -1390,17 +1402,20 @@ void BFSCtx::handleCtrlPaths(BasicBlock *BB,
 
 void BFSCtx::handleDependentFunctionArgs(CallInst *CallI, BasicBlock *BB) {
   DepChain DependentArgs;
-  for (auto ADBP = ADBs.begin(), ADBEnd = ADBs.end(); ADBP != ADBEnd;) {
-    auto &ADB = ADBP->second;
+
+  for (auto &ADBP : ADBs) {
+    auto &ADB = ADBP.second;
 
     bool FDep = areAllFunctionArgsPartOfAllDepChains(ADB, CallI, DependentArgs);
 
+    // Instead of deleting an ADB if it doesn't run into a function, we keep it
+    // with an empty DCM, thereby ensuring that no further items can be added to
+    // the DepChain until control flow returns to this function, but still
+    // allowing an ending to be mapped to it.
     if (DependentArgs.empty())
-      ADBP = ADBs.erase(ADBP);
-    else {
+      ADB.clearDCMap();
+    else
       ADB.resetDCMTo(BB, FDep, DependentArgs);
-      ++ADBP;
-    }
 
     DependentArgs.clear();
   }
@@ -1429,13 +1444,14 @@ InterprocBFSRes BFSCtx::runInterprocBFS(BasicBlock *FirstBB, CallInst *CallI) {
     InterprocCtx.runBFS();
     return InterprocBFSRes(std::move(InterprocCtx.ReturnedADBs),
                            std::move(InterprocCtx.ReturnedCDBs));
-  } else if (auto *VC = dyn_cast<VerCtx>(this)) {
+  }
+  if (auto *VC = dyn_cast<VerCtx>(this)) {
     VerCtx InterprocCtx = VerCtx(*VC, FirstBB, CallI);
     InterprocCtx.runBFS();
     return InterprocBFSRes(std::move(InterprocCtx.ReturnedADBs),
                            std::move(InterprocCtx.ReturnedCDBs));
-  } else
-    llvm_unreachable("Called runInterprocBFS() with no BFSCtx child.");
+  }
+  llvm_unreachable("Called runInterprocBFS() with no BFSCtx child.");
 }
 
 constexpr unsigned BFSCtx::currentLimit() const {
@@ -1595,6 +1611,9 @@ void BFSCtx::visitCallInst(CallInst &CallI) {
     if (ADBs.find(ID) != ADBs.end()) {
       auto &ADB = ADBs.at(ID);
 
+      if (RADB.isDepChainMapEmpty())
+        continue;
+
       ADB.addToDCUnion(BB, cast<Value>(&CallI));
 
       // If not all dep chains from the beginning got returned, FDep might
@@ -1603,7 +1622,9 @@ void BFSCtx::visitCallInst(CallInst &CallI) {
         ADB.addToDCInter(BB, cast<Value>(&CallI));
       else
         ADB.cannotBeFullDependencyAnymore();
-    } else
+    } else if (RADB.isDepChainMapEmpty())
+      ADBs.emplace(ID, RADB);
+    else
       ADBs.emplace(ID, PotAddrDepBeg(RADB, CallI.getParent(),
                                      DepChain{cast<Value>(&CallI)}));
   }
@@ -1671,22 +1692,22 @@ void BFSCtx::visitSwitchInst(SwitchInst &SwitchI) {
 void BFSCtx::visitReturnInst(ReturnInst &RetI) {
   auto *RetVal = RetI.getReturnValue();
 
-  if (!RetVal)
-    return;
-
   if (!recLevel())
     return;
 
   for (auto &ADBP : ADBs) {
     auto &ADB = ADBP.second;
 
-    if (!ADB.belongsToDepChain(BB, RetVal))
-      continue;
+    if (!RetVal || ADB.isDepChainMapEmpty() ||
+        !ADB.belongsToDepChain(BB, RetVal)) {
+      ReturnedADBs.emplace(ADBP.first, ADB);
+      ReturnedADBs.at(ADBP.first).clearDCMap();
+    } else {
+      if (ADB.belongsToSomeNotAllDepChains(BB, RetVal))
+        ADB.cannotBeFullDependencyAnymore();
 
-    if (ADB.belongsToSomeNotAllDepChains(BB, RetVal))
-      ADB.cannotBeFullDependencyAnymore();
-
-    ReturnedADBs.emplace(ADBP.first, ADB);
+      ReturnedADBs.emplace(ADBP.first, ADB);
+    }
   }
 
   for (auto &CDB : CDBs)
@@ -1768,10 +1789,11 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
   auto *BugVal2 = new AllocaInst(Type::getInt32PtrTy(InstContext), 0,
                                  std::string("BugVal2"), &*F->begin()->begin());
 
-  new StoreInst(ConstantInt::get(Type::getInt32Ty(InstContext), 42),
-                cast<Value>(BugVal1), InstWithAnnotation);
+  auto *S1 = new StoreInst(ConstantInt::get(Type::getInt32Ty(InstContext), 42),
+                           cast<Value>(BugVal1), true, InstWithAnnotation);
 
-  new StoreInst(BugVal1, cast<Value>(BugVal2), InstWithAnnotation);
+  new StoreInst(BugVal1, cast<Value>(BugVal2), true,
+                S1->getNextNonDebugInstruction());
 
   if (AnnotationType == "dep begin") {
     for (auto InstIt = InstWithAnnotation->getIterator(),
@@ -1784,15 +1806,15 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
       }
 
     // Replace the source of the store to break the dependency chain.
-    InstWithAnnotation->setOperand(0, BugVal2);
+    InstWithAnnotation->setOperand(0, BugVal1);
   } else {
     if (IOpCode == Instruction::Load) {
       // Update the source of our annotated load to be the global BugVal.
-      InstWithAnnotation->setOperand(0, BugVal2);
+      InstWithAnnotation->setOperand(0, BugVal1);
       // Set a new name.
       InstWithAnnotation->setName("new_ending");
     } else
-      InstWithAnnotation->setOperand(1, BugVal2);
+      InstWithAnnotation->setOperand(1, BugVal1);
   }
 }
 
@@ -2073,8 +2095,8 @@ void LKMMVerifier::printBrokenDeps() {
 
     if (PrintedBrokenIDs.find(ID) != PrintedBrokenIDs.end())
       return;
-    else
-      PrintedBrokenIDs.insert(ID);
+
+    PrintedBrokenIDs.insert(ID);
 
     printBrokenDep(VDB, VDE, ID);
   };
