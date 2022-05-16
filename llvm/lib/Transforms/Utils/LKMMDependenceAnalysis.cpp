@@ -1633,8 +1633,8 @@ void BFSCtx::visitCallInst(CallInst &CallI) {
     auto &ID = RCDBP.first;
     auto &RCDB = RCDBP.second;
 
-    CDBs.emplace(ID, RCDB);
-    CDBs.at(ID).setCannotResolve();
+    if (CDBs.emplace(ID, RCDB).second)
+      CDBs.at(ID).setCannotResolve();
   }
 }
 
