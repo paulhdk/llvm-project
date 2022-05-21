@@ -33,6 +33,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Debug.h"
 #include <list>
 #include <queue>
 #include <string>
@@ -2121,7 +2122,6 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
   errs() << "==========\n";
   errs() << DepKindStr << " with ID " << ID
          << " couldn't be verified. It might have been broken.\n";
-  errs() << "==========\n\n";
 
   errs() << "Dependency Beginning:\n";
   errs() << "source code path to beginning:\n\t" << Beg.getParsedPathTo()
@@ -2137,30 +2137,32 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
     errs() << "Full dependency: " << (VADE->getParsedFullDep() ? "yes" : "no")
            << "\n";
 
-  errs() << "\nFirst access(es) in optimised IR\n\n";
+#define DEBUG_TYPE "lkmm-print-modules"
+  LLVM_DEBUG(dbgs() << "\nFirst access in optimised IR\n\n"
+                    << "inst:\n\t";);
 
-  errs() << "inst:\n\t";
-  Beg.getInst()->print(errs());
-  errs() << "\noptimised IR function:\n\t"
-         << Beg.getInst()->getFunction()->getName() << "\n";
+  LLVM_DEBUG(Beg.getInst()->print(dbgs()));
 
-  errs() << "\n";
+  LLVM_DEBUG(dbgs() << "\noptimised IR function:\n\t"
+                    << Beg.getInst()->getFunction()->getName() << "\n\n");
 
-  errs() << "\nSecond access(es) in optimised IR\n\n";
+  LLVM_DEBUG(dbgs() << "\nSecond access in optimised IR\n\n"
+                    << "inst:\n\t");
 
-  errs() << "inst:\n\t";
-  End.getInst()->print(errs());
-  errs() << "\noptimised IR function:\n\t"
-         << End.getInst()->getFunction()->getName() << "\n";
+  LLVM_DEBUG(End.getInst()->print(dbgs()));
 
-  errs() << "\n";
+  LLVM_DEBUG(dbgs() << "\noptimised IR function:\n\t"
+                    << End.getInst()->getFunction()->getName() << "\n\n");
 
   if (PrintedModules.find(Beg.getInst()->getModule()) == PrintedModules.end()) {
-    errs() << "Optimised IR module:\n";
-    Beg.getInst()->getModule()->print(errs(), nullptr);
+    LLVM_DEBUG(dbgs() << "Optimised IR module:\n");
+    LLVM_DEBUG(Beg.getInst()->getModule()->print(dbgs(), nullptr));
 
     PrintedModules.insert(Beg.getInst()->getModule());
   }
+#undef DEBUG_TYPE
+
+  errs() << "==========\n\n";
 }
 
 //===----------------------------------------------------------------------===//
