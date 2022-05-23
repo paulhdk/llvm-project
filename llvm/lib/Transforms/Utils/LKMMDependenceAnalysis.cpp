@@ -2119,9 +2119,9 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
     DepKindStr = "Control dependency";
   }
 
-  errs() << "==========\n";
-  errs() << DepKindStr << " with ID " << ID
-         << " couldn't be verified. It might have been broken.\n";
+  errs() << "//===--------------------------Broken "
+            "Dependency---------------------------===//\n";
+  errs() << DepKindStr << " with ID: " << ID << "\n";
 
   errs() << "Dependency Beginning:\n";
   errs() << "source code path to beginning:\n\t" << Beg.getParsedPathTo()
@@ -2162,7 +2162,9 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
   }
 #undef DEBUG_TYPE
 
-  errs() << "==========\n\n";
+  errs() << "//"
+            "===---------------------------------------------------------------"
+            "-------===//\n\n";
 }
 
 //===----------------------------------------------------------------------===//
