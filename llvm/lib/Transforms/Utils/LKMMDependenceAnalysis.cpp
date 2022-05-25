@@ -2121,18 +2121,18 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
 
   errs() << "//===--------------------------Broken "
             "Dependency---------------------------===//\n";
-  errs() << DepKindStr << " with ID: " << ID << "\n";
+  errs() << DepKindStr << " with ID: " << ID << "\n\n";
 
   errs() << "Dependency Beginning:\n";
   errs() << "source code path to beginning:\n\t" << Beg.getParsedPathTo()
          << "\n";
   if (auto *VCDB = dyn_cast<VerCtrlDepBeg>(&Beg)) {
-    errs() << "source code path to branch:\n\t" << VCDB->getParsedPathToBranch()
+    errs() << "Source code path to branch:\n\t" << VCDB->getParsedPathToBranch()
            << "\n";
   }
 
   errs() << "\nDependnecy Ending:\n";
-  errs() << "source code path to ending:\n\t" << End.getParsedPathTo() << "\n";
+  errs() << "Source code path to ending:\n\t" << End.getParsedPathTo() << "\n";
   if (auto *VADE = dyn_cast<VerAddrDepEnd>(&End))
     errs() << "Full dependency: " << (VADE->getParsedFullDep() ? "yes" : "no")
            << "\n";
@@ -2151,7 +2151,7 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
 
   LLVM_DEBUG(End.getInst()->print(dbgs()));
 
-  LLVM_DEBUG(dbgs() << "\noptimised IR function:\n\t"
+  LLVM_DEBUG(dbgs() << "\nOptimised IR function:\n\t"
                     << End.getInst()->getFunction()->getName() << "\n\n");
 
   if (PrintedModules.find(Beg.getInst()->getModule()) == PrintedModules.end()) {
