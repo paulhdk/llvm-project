@@ -301,8 +301,8 @@ public:
   /// \param I2 the instruction where the address dependency ends.
   /// \param FDep set to true if this is a full address
   ///  dependency.
-  void addAdrDep(std::string PathTo2, std::string PathToViaFiles2,
-                 Instruction *I2, bool FDep) const;
+  void addAddrDep(std::string PathTo2, std::string PathToViaFiles2,
+                  Instruction *I2, bool FDep) const;
 
   /// Resets the DepChainMap to a new state and potentially alteres the
   /// possibility of this PotAddrDepBeg being the beginning of a full
@@ -1249,8 +1249,8 @@ bool PotAddrDepBeg::belongsToSomeNotAllDepChains(BasicBlock *BB,
   return !belongsToAllDepChains(BB, VCmp) && belongsToDepChain(BB, VCmp);
 }
 
-void PotAddrDepBeg::addAdrDep(std::string PathTo2, std::string PathToViaFiles2,
-                              Instruction *I2, bool FDep) const {
+void PotAddrDepBeg::addAddrDep(std::string PathTo2, std::string PathToViaFiles2,
+                               Instruction *I2, bool FDep) const {
   auto ID = getID() + PathTo2;
 
   std::string begin_annotation = "LKMMDep: address dep begin," + ID + "," +
@@ -1731,9 +1731,9 @@ void BFSCtx::handleLoadStoreInst(Instruction &I) {
     if (I.isVolatile())
       if (isa<AnnotCtx>(this)) {
         if (ADB.belongsToAllDepChains(BB, VEnd) && ADB.canBeFullDependency())
-          ADB.addAdrDep(getFullPath(&I), getFullPath(&I, true), &I, true);
+          ADB.addAddrDep(getFullPath(&I), getFullPath(&I, true), &I, true);
         else if (ADB.belongsToSomeNotAllDepChains(BB, VEnd))
-          ADB.addAdrDep(getFullPath(&I), getFullPath(&I, true), &I, false);
+          ADB.addAddrDep(getFullPath(&I), getFullPath(&I, true), &I, false);
       }
 
     ADB.tryAddValueToDepChains(&I, I.getOperand(0), VAdd);
