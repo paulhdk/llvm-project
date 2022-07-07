@@ -533,6 +533,19 @@ private:
 
 class VerDepHalf : public DepHalf {
 public:
+  enum BrokenByType { BrokenDC, PToF };
+
+  void setBrokenBy(BrokenByType BB) { BrokenBy = BB; }
+
+  std::string getBrokenBy() {
+    switch (BrokenBy) {
+    case BrokenDC:
+      return "by breaking the dependency chain";
+    case PToF:
+      return "by converting a partial dependency to a full dependency";
+    }
+  }
+
   std::string const &getParsedDepHalfID() const { return ParsedDepHalfID; }
 
   std::string const &getParsedpathTOViaFiles() const {
@@ -558,6 +571,9 @@ protected:
                                               ParsedPathToViaFiles} {}
 
 private:
+  // Shows how this dependency got broken
+  BrokenByType BrokenBy;
+
   // The ID which identifies the two metadata annotations for this dependency.
   const std::string ParsedID;
 
@@ -1954,6 +1970,12 @@ bool VerCtx::handleAddrDepID(std::string const &ID, Instruction *I,
     BrokenADEs->emplace(ID, VerAddrDepEnd(I, ID, getFullPath(I),
                                           getFullPath(I, true), ParsedDepHalfID,
                                           ParsedPathToViaFiles, ParsedFullDep));
+
+    // Identify how the dependency got broken
+    if (!ParsedFullDep && ADB.belongsToAllDepChains(BB, VCmp))
+      BrokenADEs->at(ID).setBrokenBy(VerDepHalf::BrokenByType::PToF);
+    else if (!ADB.belongsToDepChain(BB, VCmp))
+      BrokenADEs->at(ID).setBrokenBy(VerDepHalf::BrokenByType::BrokenDC);
   }
   return false;
 }
@@ -2078,6 +2100,8 @@ bool VerCtx::handleCtrlDepID(std::string const &ID, Instruction *I,
   BrokenCDEs->emplace(ID,
                       VerCtrlDepEnd(I, ID, getFullPath(I), getFullPath(I, true),
                                     ParsedDepHalfID, ParsedPathToViaFiles));
+
+  BrokenCDEs->at(ID).setBrokenBy(VerDepHalf::BrokenByType::PToF);
 
   return false;
 }
@@ -2246,6 +2270,8 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
   if (auto *VADE = dyn_cast<VerAddrDepEnd>(&End))
     errs() << "\nFull dependency: " << (VADE->getParsedFullDep() ? "yes" : "no")
            << "\n";
+
+  errs() << "Broken " << End.getBrokenBy() << "\n";
 
 #define DEBUG_TYPE "lkmm-print-modules"
   LLVM_DEBUG(dbgs() << "\nFirst access in optimised IR\n\n"
