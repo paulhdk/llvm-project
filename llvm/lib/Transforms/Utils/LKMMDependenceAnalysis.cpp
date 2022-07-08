@@ -57,12 +57,13 @@ constexpr StringRef AddrDepEndStr = "LKMMDep: address dep end";
 constexpr StringRef CtrlDepBegStr = "LKMMDep: ctrl dep begin";
 constexpr StringRef CtrlDepEndStr = "LKMMDep: ctrl dep end";
 
-// FIXME Is there a more elegant way of dealing with duplicate IDs (preferably
-// getting eliminating the problem all together)?
+// FIXME Is there a more elegant way of dealing with duplicate IDs
+// (preferably getting eliminating the problem all together)?
 
-// The IDReMap type alias represents the map of IDs to sets of alias IDs which
-// verification contexts use for remapping duplicate IDs. Duplicate IDs appear
-// when an annotated instruction is duplicated as part of optimizations.
+// The IDReMap type alias represents the map of IDs to sets of alias IDs
+// which verification contexts use for remapping duplicate IDs. Duplicate
+// IDs appear when an annotated instruction is duplicated as part of
+// optimizations.
 using IDReMap =
     std::unordered_map<std::string, std::unordered_set<std::string>>;
 
@@ -1127,12 +1128,12 @@ private:
   /// \param ID a reference to the ID which should be updated.
   void updateID(std::string &ID) {
     if (RemappedIDs->find(ID) == RemappedIDs->end()) {
-      RemappedIDs->emplace(ID, std::unordered_set<std::string>{ID + "-1"});
-      ID = ID + "-1";
+      RemappedIDs->emplace(ID, std::unordered_set<std::string>{ID + "-#1"});
+      ID = ID + "-#1";
     } else {
-      RemappedIDs->at(ID).insert(
-          ID + "-" + (std::to_string(RemappedIDs->at(ID).size() + 1)));
-      ID = ID + "-" + (std::to_string(RemappedIDs->at(ID).size() + 1));
+      auto S = RemappedIDs->at(ID).size();
+      RemappedIDs->at(ID).insert(ID + "-#" + std::to_string(S + 1));
+      ID = ID + "-#" + std::to_string(S + 1);
     }
   }
 
@@ -1963,10 +1964,10 @@ bool VerCtx::handleAddrDepID(std::string const &ID, Instruction *I,
       return true;
     }
 
-    // We only add the current annotation as a broken ending if the current BFS
-    // has seen the beginning ID. If we were to add unconditionally, we might
-    // add endings which aren't actually reachable by the corresponding. Such
-    // cases may be false positivies.
+    // We only add the current annotation as a broken ending if the current
+    // BFS has seen the beginning ID. If we were to add unconditionally, we
+    // might add endings which aren't actually reachable by the corresponding.
+    // Such cases may be false positivies.
     BrokenADEs->emplace(ID, VerAddrDepEnd(I, ID, getFullPath(I),
                                           getFullPath(I, true), ParsedDepHalfID,
                                           ParsedPathToViaFiles, ParsedFullDep));
@@ -2051,7 +2052,8 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       // If we are able to verify one pair in
       // {ORIGINAL_ID} \cup REMAPPED_IDS.at(ORIGINAL_ID) x {ORIGINAL_ID}
       // We consider ORIGINAL_ID verified; there only exists one dependency in
-      // unoptimised IR, hence we only look for one dependency in optimised IR.
+      // unoptimised IR, hence we only look for one dependency in optimised
+      // IR.
       if (ParsedDepHalfTypeStr.find("address dep") != std::string::npos) {
         bool ParsedFullDep = std::stoi(AnnotData[4]);
 
@@ -2222,7 +2224,12 @@ PreservedAnalyses LKMMVerifier::run(Module &M, ModuleAnalysisManager &AM) {
 
 void LKMMVerifier::printBrokenDeps() {
   auto checkDepPair = [this](auto &P, auto &E) {
-    auto &ID = P.first;
+    auto ID = P.first;
+
+    // Exclude duplicate IDs by normalising them.
+    // This means we only print one representative of each equivalence class.
+    if (auto Pos = ID.find("-#"))
+      ID = ID.substr(0, Pos);
 
     auto &VDB = P.second;
 
