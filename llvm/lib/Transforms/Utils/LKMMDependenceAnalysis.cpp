@@ -1127,12 +1127,12 @@ private:
   /// \param ID a reference to the ID which should be updated.
   void updateID(std::string &ID) {
     if (RemappedIDs->find(ID) == RemappedIDs->end()) {
-      RemappedIDs->emplace(ID, std::unordered_set<std::string>{ID + "-1"});
-      ID = ID + "-1";
+      RemappedIDs->emplace(ID, std::unordered_set<std::string>{ID + "-#1"});
+      ID = ID + "-#1";
     } else {
-      RemappedIDs->at(ID).insert(
-          ID + "-" + (std::to_string(RemappedIDs->at(ID).size() + 1)));
-      ID = ID + "-" + (std::to_string(RemappedIDs->at(ID).size() + 1));
+      auto S = RemappedIDs->at(ID).size();
+      RemappedIDs->at(ID).insert(ID + "-#" + std::to_string(S + 1));
+      ID = ID + "-#" + std::to_string(S + 1);
     }
   }
 
