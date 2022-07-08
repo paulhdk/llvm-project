@@ -2222,7 +2222,12 @@ PreservedAnalyses LKMMVerifier::run(Module &M, ModuleAnalysisManager &AM) {
 
 void LKMMVerifier::printBrokenDeps() {
   auto checkDepPair = [this](auto &P, auto &E) {
-    auto &ID = P.first;
+    auto ID = P.first;
+
+    // Exclude duplicate IDs by normalising them.
+    // This means we only print one representative of each equivalence class.
+    if (auto Pos = ID.find("-#"))
+      ID = ID.substr(0, Pos);
 
     auto &VDB = P.second;
 
