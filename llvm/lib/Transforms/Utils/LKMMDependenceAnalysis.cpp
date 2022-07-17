@@ -1412,6 +1412,11 @@ bool PotCtrlDepBeg::progressCtrlPaths(
   for (auto &s : *SuccessorsWOBackEdges)
     CtrlPaths.insert(s);
 
+  // Account for the case where the condition has a backedge, e.g. in a do-while
+  // loop.
+  if (HasBackEdges)
+    CtrlPaths.insert(BB);
+
   return false;
 }
 
