@@ -2276,8 +2276,12 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
   errs() << DepKindStr << " with ID: " << ID << "\n\n";
 
   errs() << "Dependency Beginning:\t" << Beg.getParsedDepHalfID() << "\n";
+  errs() << "\nPath to (via files) from annotation: "
+         << Beg.getParsedpathTOViaFiles() << "\n";
 
   errs() << "\nDependnecy Ending:\t" << End.getParsedDepHalfID() << "\n";
+  errs() << "\nPath to (via files) from annotation: "
+         << End.getParsedpathTOViaFiles() << "\n";
 
   if (auto *VADE = dyn_cast<VerAddrDepEnd>(&End))
     errs() << "\nFull dependency: " << (VADE->getParsedFullDep() ? "yes" : "no")
