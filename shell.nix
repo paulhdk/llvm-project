@@ -1,5 +1,5 @@
 # source https://nixos.wiki/wiki/LLVM
-with import <nixpkgs> {};
+with import <nixpkgs> { };
 (mkShell.override {
   stdenv = llvmPackages_14.stdenv;
 }) {
@@ -11,10 +11,10 @@ with import <nixpkgs> {};
     clang-tools
     ninja
     graphviz
-    python39
-    python39Packages.html5lib
-    python39Packages.pyyaml
-    python39Packages.pygments
+    python310
+    python310Packages.html5lib
+    python310Packages.pyyaml
+    python310Packages.pygments
   ];
 
   disableHardening = true;
