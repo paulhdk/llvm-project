@@ -16,7 +16,6 @@ CMAKE_CONFIG_FLAGS = ["-DLLVM_ENABLE_PROJECTS=\"clang;clang-tools-extra;lldb\"",
 
 
 def configure_llvm():
-    os.chdir("build")
     CmdStr = "cmake -G Ninja " + " ".join(map(str, CMAKE_CONFIG_FLAGS)) + " ../llvm",
     subprocess.run(CmdStr, shell=True, check=True)
 
@@ -26,6 +25,7 @@ def build_llvm(target):
 
 
 if __name__ == "__main__":
+    os.chdir("build")
     match sys.argv[1]:
         case "config":
             configure_llvm()
