@@ -1,5 +1,13 @@
 # source https://nixos.wiki/wiki/LLVM
 with import <nixpkgs> { };
+let
+  myPython = pkgs.python310.withPackages (ps: with ps; [
+    autopep8
+    html5lib
+    pyyaml
+    pygments
+  ]);
+in
 (mkShell.override {
   stdenv = llvmPackages_14.stdenv;
 }) {
@@ -11,10 +19,7 @@ with import <nixpkgs> { };
     clang-tools
     ninja
     graphviz
-    python310
-    python310Packages.html5lib
-    python310Packages.pyyaml
-    python310Packages.pygments
+    myPython
   ];
 
   disableHardening = true;
