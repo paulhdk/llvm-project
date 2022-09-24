@@ -1,0 +1,36 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "preLaunchTask": "produceCompileArgsFile",
+            "name": "Debug Module",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/clang",
+            "stopAtEntry": false,
+            "args": [
+                "${input:CompileCmdArgs}"
+            ],
+            "cwd": "${env:LINUX}",
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true,
+                }
+            ]
+        },
+    ],
+    "inputs": [
+        {
+            "id": "CompileCmdArgs",
+            "type": "command",
+            "command": "extension.commandvariable.file.content",
+            "args": {
+                "fileName": "${workspaceFolder}/.compile_args",
+            }
+        }
+    ]
+}
