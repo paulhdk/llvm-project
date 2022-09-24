@@ -30,12 +30,46 @@
 			],
 			"problemMatcher": []
 		},
+		{
+			"label": "produceCompileArgsFile",
+			"hide": true,
+			"command": "./doitlk-debug-get-compile-command-args.py",
+			"args": [
+				"writeArgsToFile",
+				"${input:moduleCompileCommandsPath}"
+			],
+			"problemMatcher": [],
+			"dependsOn": [
+				"LLVM Build Clang"
+			]
+		},
+		{
+			"type": "shell",
+			"label": "removCompileArgsFile",
+			"hide": true,
+			"command": "./doitlk-debug-get-compile-command-args.py",
+			"args": [
+				"clean"
+			],
+			"problemMatcher": []
+		},
 	],
 	"inputs": [
 		{
 			"id": "target",
 			"type": "promptString",
 			"description": "CMake Build Target"
-		}
+		},
+		{
+			"id": "moduleCompileCommandsPath",
+			"type": "command",
+			"command": "extension.commandvariable.file.pickFile",
+			"args": {
+				"fromFolder": {
+					"fixed": "/scratch/paul/src/linux/"
+				},
+				"include": "**/.*.o.cmd"
+			}
+		},
 	]
 }
