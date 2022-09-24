@@ -1,0 +1,41 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "shell",
+			"label": "LLVM Configure",
+			"command": "./doitlk-llvm-build.py",
+			"args": [
+				"config"
+			],
+			"problemMatcher": []
+		},
+		{
+			"type": "shell",
+			"label": "LLVM Build Clang",
+			"command": "./doitlk-llvm-build.py",
+			"args": [
+				"build",
+				"clang"
+			],
+			"problemMatcher": []
+		},
+		{
+			"type": "shell",
+			"label": "LLVM Build",
+			"command": "./doitlk-llvm-build.py",
+			"args": [
+				"build",
+				"${input:target}"
+			],
+			"problemMatcher": []
+		},
+	],
+	"inputs": [
+		{
+			"id": "target",
+			"type": "promptString",
+			"description": "CMake Build Target"
+		}
+	]
+}
