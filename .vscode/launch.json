@@ -22,6 +22,20 @@
                 }
             ]
         },
+        {
+            "preLaunchTask": "produceCompileArgsFile",
+            "preRunCommands": [
+                "command script import setup_LLDB_args.py"
+            ],
+            "name": "LLDB Debug Module",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/clang",
+            "args": "${input:CompileCmdArgs}",
+            "cwd": "${env:LINUX}",
+            "terminal": "console",
+            "postDebugTask": "removCompileArgsFile"
+        }
     ],
     "inputs": [
         {
