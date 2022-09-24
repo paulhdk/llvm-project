@@ -20,7 +20,13 @@ in
     ninja
     graphviz
     myPython
+    llvmPackages_14.lld
+    llvmPackages_14.lldb
   ];
 
   disableHardening = true;
+  shellHook = ''
+    export PYTHONPATH='lldb -P'
+  '';
+
 }
