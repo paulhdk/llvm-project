@@ -12,16 +12,18 @@ CMAKE_CONFIG_FLAGS = ["-DLLVM_ENABLE_PROJECTS=\"clang;clang-tools-extra;lldb\"",
                       "-DLLVM_ENABLE_ASSERTIONS=\"ON\"",
                       "-DCMAKE_EXPORT_COMPILE_COMMANDS=\"ON\"",
                       "-DLLVM_CCACHE_BUILD=\"ON\""
+                      "-DLLVM_ENABLE_LLD=\"ON\""
                       ]
 
 
 def configure_llvm():
-    CmdStr = "cmake -G Ninja " + " ".join(map(str, CMAKE_CONFIG_FLAGS)) + " ../llvm",
+    CmdStr = "cmake -G Ninja " + \
+        " ".join(map(str, CMAKE_CONFIG_FLAGS)) + " ../llvm",
     subprocess.run(CmdStr, shell=True, check=True)
 
 
 def build_llvm(target):
-    subprocess.run(["ninja", target], check=True)
+    subprocess.run(["ninja", target, "-j 128"], check=True)
 
 
 if __name__ == "__main__":
