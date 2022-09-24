@@ -56,7 +56,8 @@ autoconf/autom4te.cache
 # Directories to ignore (do not add trailing '/'s, they skip symlinks).
 #==============================================================================#
 # VS2017 and VSCode config files.
-.vscode
+!/.vscode
+/.vscode/*.log
 .vs
 # pythonenv for github Codespaces
 pythonenv*
