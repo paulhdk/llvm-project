@@ -26,5 +26,6 @@ pkgs.llvmPackages_latest.stdenv.mkDerivation {
   shellHook = ''
     export PYTHONPATH='lldb -P'
   '';
+  PATH_TO_CLANG = "${pkgs.llvmPackages_latest.stdenv.cc}/bin/clang++";
 
 }

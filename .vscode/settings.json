@@ -96,5 +96,8 @@
     "stop_token": "cpp",
     "variant": "cpp",
     "*.inc": "cpp"
-  }
+  },
+  "clangd.arguments": [
+    "--query-driver=${env:PATH_TO_CLANG}"
+  ]
 }
