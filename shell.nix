@@ -22,8 +22,7 @@ pkgs.llvmPackages_latest.stdenv.mkDerivation {
     pkgs.llvmPackages_latest.lld
     pkgs.llvmPackages_latest.lldb
   ];
-
-  disableHardening = true;
+  hardeningDisable = [ "all" ];
   shellHook = ''
     export PYTHONPATH='lldb -P'
   '';
