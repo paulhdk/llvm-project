@@ -747,8 +747,8 @@ protected:
   ///  filename::line:col instead of functinoName::line:column
   ///
   /// \returns a string representation of \p I's full path.
-  string getFullPath(Instruction *I, bool viaFiles = false) {
-    return convertPathToString(viaFiles) + getInstLocString(I, viaFiles);
+  string getFullPath(Instruction *I, bool ViaFiles = false) {
+    return convertPathToString(ViaFiles) + getInstLocString(I, ViaFiles);
   }
 
   /// Returns string representation of the full path to an instructions, i.e. a
@@ -769,11 +769,11 @@ protected:
   ///  function name
   ///
   /// \returns a string represenation of \p CallPath.
-  string convertPathToString(bool viaFiles = false) {
+  string convertPathToString(bool ViaFiles = false) {
     string PathStr{""};
 
     for (auto &CallI : *CallPath)
-      PathStr += (getInstLocString(CallI, viaFiles) + "  ");
+      PathStr += (getInstLocString(CallI, ViaFiles) + "  ");
 
     return PathStr;
   }
@@ -831,7 +831,7 @@ protected:
   void removeBackEdgesFromSuccessors(
       BasicBlock *BB, unordered_set<BasicBlock *> *BEDs,
       unordered_set<BasicBlock *> *SuccessorsWOBackEdges) {
-    for (auto SBB : successors(BB))
+    for (auto *SBB : successors(BB))
       if (BEDs->find(SBB) == BEDs->end())
         SuccessorsWOBackEdges->insert(SBB);
   }
@@ -948,7 +948,7 @@ private:
   }
 
   void markIDAsVerified(string &ParsedID) {
-    auto delID = [](auto &ID, auto &Bs, auto &Es, auto &RemappedIDs) {
+    auto DelId = [](auto &ID, auto &Bs, auto &Es, auto &RemappedIDs) {
       Bs->erase(ID);
       Es->erase(ID);
 
@@ -959,7 +959,7 @@ private:
         }
     };
 
-    delID(ParsedID, BrokenADBs, BrokenADEs, RemappedIDs);
+    DelId(ParsedID, BrokenADBs, BrokenADEs, RemappedIDs);
 
     VerifiedIDs->insert(ParsedID);
     RemappedIDs->erase(ParsedID);
@@ -997,7 +997,7 @@ void PotAddrDepBeg::progressDCPaths(BasicBlock *BB, BasicBlock *SBB,
   list<pair<BasicBlock *, DepChain *>> PDCs;
 
   // Populate PDCs and DCUnion.
-  for (auto Pred : predecessors(SBB)) {
+  for (auto *Pred : predecessors(SBB)) {
     // If Pred is connected to SBB via a back edge, skip.
     if (BEDsForBB.at(Pred).find(SBB) != BEDsForBB.at(Pred).end())
       continue;
@@ -1083,7 +1083,7 @@ bool PotAddrDepBeg::tryAddValueToDepChains(Instruction *I, Value *VCmp,
   if (isa<ConstantData>(VAdd))
     return false;
 
-  auto ret = false;
+  auto Ret = false;
 
   auto &DCP = DCM.at(I->getParent());
 
@@ -1093,7 +1093,7 @@ bool PotAddrDepBeg::tryAddValueToDepChains(Instruction *I, Value *VCmp,
   // Add to DCinter and account for redefinition.
   if (DCInter.find(VCmp) != DCInter.end()) {
     DCInter.insert(VAdd);
-    ret = true;
+    Ret = true;
   } else if (isa<StoreInst>(I)) {
     auto *PotRedefOp = I->getOperand(1);
     if (DCInter.find(PotRedefOp) != DCInter.end())
@@ -1103,14 +1103,14 @@ bool PotAddrDepBeg::tryAddValueToDepChains(Instruction *I, Value *VCmp,
   // Add to DCUnion and account for redefinition
   if (DCUnion.find(VCmp) != DCUnion.end()) {
     DCUnion.insert(VAdd);
-    ret = true;
+    Ret = true;
   } else if (isa<StoreInst>(I)) {
     auto *PotRedefOp = I->getOperand(1);
     if (DCUnion.find(PotRedefOp) != DCUnion.end())
       DCUnion.erase(PotRedefOp);
   }
 
-  return ret;
+  return Ret;
 }
 
 bool PotAddrDepBeg::belongsToAllDepChains(BasicBlock *BB, Value *VCmp) const {
@@ -1268,10 +1268,9 @@ InterprocBFSRes BFSCtx::runInterprocBFS(BasicBlock *FirstBB, CallInst *CallI) {
 constexpr unsigned BFSCtx::currentLimit() const {
   if (isa<AnnotCtx>(this))
     return 3;
-  else if (isa<VerCtx>(this))
+  if (isa<VerCtx>(this))
     return 4;
-  else
-    llvm_unreachable("called currentLimit with unhandled subclass.");
+  llvm_unreachable("called currentLimit with unhandled subclass.");
 }
 
 bool BFSCtx::allFunctionArgsPartOfAllDepChains(
@@ -1282,16 +1281,16 @@ bool BFSCtx::allFunctionArgsPartOfAllDepChains(
   if (!ADB.areAllDepChainsAt(BB))
     FDep = false;
 
-  for (unsigned i = 0; i < CallI->arg_size(); ++i) {
-    auto *VCmp = CallI->getArgOperand(i);
+  for (unsigned Ind = 0; Ind < CallI->arg_size(); ++Ind) {
+    auto *VCmp = CallI->getArgOperand(Ind);
 
     if (!ADB.belongsToDepChain(BB, VCmp))
       continue;
 
-    if (!ADB.belongsToAllDepChains(BB, CallI->getArgOperand(i)))
+    if (!ADB.belongsToAllDepChains(BB, CallI->getArgOperand(Ind)))
       FDep = false;
 
-    DependentArgs.insert(CallI->getCalledFunction()->getArg(i));
+    DependentArgs.insert(CallI->getCalledFunction()->getArg(Ind));
   }
 
   return FDep;
@@ -1305,8 +1304,8 @@ bool BFSCtx::bfsCanVisit(BasicBlock *SBB,
 
   if (NextMaxHits == 0 || ++NextCurrentHits == NextMaxHits)
     return true;
-  else
-    return false;
+
+  return false;
 }
 
 void BFSCtx::parseDepHalfString(StringRef Annot,
@@ -1327,12 +1326,12 @@ void BFSCtx::buildBackEdgeMap(BBtoBBSetMap *BEDsForBB, Function *F) {
   for (auto &BB : *F)
     BEDsForBB->insert({&BB, {}});
 
-  SmallVector<pair<const BasicBlock *, const BasicBlock *>> backEdgeVector;
-  FindFunctionBackedges(*F, backEdgeVector);
+  SmallVector<pair<const BasicBlock *, const BasicBlock *>> BackEdgeVector;
+  FindFunctionBackedges(*F, BackEdgeVector);
 
-  for (auto &backEdge : backEdgeVector) {
-    BEDsForBB->at(const_cast<BasicBlock *>(backEdge.first))
-        .insert(const_cast<BasicBlock *>(backEdge.second));
+  for (auto &BackEdge : BackEdgeVector) {
+    BEDsForBB->at(const_cast<BasicBlock *>(BackEdge.first))
+        .insert(const_cast<BasicBlock *>(BackEdge.second));
   }
 }
 
@@ -1343,7 +1342,7 @@ void BFSCtx::buildBFSInfo(unordered_map<BasicBlock *, BFSBBInfo> *BFSInfo,
 
     // Every incoming edge which is a back edge, i.e. closes a loop, is not
     // considered in MaxHits.
-    for (auto Pred : predecessors(&BB))
+    for (auto *Pred : predecessors(&BB))
       if (BEDsForBB->at(Pred).find(&BB) != BEDsForBB->at(Pred).end())
         --MaxHits;
 
@@ -1361,7 +1360,7 @@ string BFSCtx::buildInlineString(Instruction *I) {
                       "::" + to_string(InstDebugLoc.getLine()) + ":" +
                       to_string(InstDebugLoc.getCol());
 
-  auto InlinedAt = InstDebugLoc.getInlinedAt();
+  auto *InlinedAt = InstDebugLoc.getInlinedAt();
 
   while (InlinedAt) {
     // Column.
@@ -1386,8 +1385,9 @@ void BFSCtx::visitBasicBlock(BasicBlock &BB) { this->BB = &BB; }
 
 void BFSCtx::visitInstruction(Instruction &I) {
   for (auto &ADBP : ADBs)
-    for (unsigned i = 0; i < I.getNumOperands(); ++i)
-      ADBP.second.tryAddValueToDepChains(&I, I.getOperand(i), cast<Value>(&I));
+    for (unsigned Ind = 0; Ind < I.getNumOperands(); ++Ind)
+      ADBP.second.tryAddValueToDepChains(&I, I.getOperand(Ind),
+                                         cast<Value>(&I));
 }
 
 void BFSCtx::visitCallInst(CallInst &CallI) {
@@ -1402,15 +1402,15 @@ void BFSCtx::visitCallInst(CallInst &CallI) {
   if (recLevel() > currentLimit())
     return;
 
-  InterprocBFSRes ret;
+  InterprocBFSRes Ret;
 
   // FIXME redundant checks?
   if (isa<AnnotCtx>(this))
-    ret = runInterprocBFS(&*CalledF->begin(), &CallI);
+    Ret = runInterprocBFS(&*CalledF->begin(), &CallI);
   else if (isa<VerCtx>(this))
-    ret = runInterprocBFS(&*CalledF->begin(), &CallI);
+    Ret = runInterprocBFS(&*CalledF->begin(), &CallI);
 
-  auto &RADBsFromCall = ret;
+  auto &RADBsFromCall = Ret;
 
   // Handle returned addr deps.
   for (auto &RADBP : RADBsFromCall) {
@@ -1468,8 +1468,8 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) { handleLoadStoreInst(StoreI); }
 void BFSCtx::visitPHINode(PHINode &PhiI) {
   for (auto &ADBP : ADBs) {
     auto &ADB = ADBP.second;
-    for (unsigned i = 0; i < PhiI.getNumIncomingValues(); ++i)
-      if (!ADB.tryAddValueToDepChains(&PhiI, PhiI.getIncomingValue(i),
+    for (unsigned Ind = 0; Ind < PhiI.getNumIncomingValues(); ++Ind)
+      if (!ADB.tryAddValueToDepChains(&PhiI, PhiI.getIncomingValue(Ind),
                                       cast<Value>(&PhiI)))
         ADB.cannotBeFullDependencyAnymore();
   }
@@ -1532,10 +1532,10 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
   Instruction *InstWithAnnotation = nullptr;
 
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-    if (auto *md = I->getMetadata("annotation")) {
-      for (auto &op : md->operands()) {
-        if (isa<MDString>(op) &&
-            cast<MDString>(op)->getString().contains(AnnotationType) &&
+    if (auto *MDN = I->getMetadata("annotation")) {
+      for (auto &Op : MDN->operands()) {
+        if (isa<MDString>(Op) &&
+            cast<MDString>(Op)->getString().contains(AnnotationType) &&
             (I->getOpcode() == IOpCode)) {
           InstWithAnnotation = &*I;
           break;
@@ -1812,7 +1812,7 @@ PreservedAnalyses LKMMVerifier::run(Module &M, ModuleAnalysisManager &AM) {
 }
 
 void LKMMVerifier::printBrokenDeps() {
-  auto checkDepPair = [this](auto &P, auto &E) {
+  auto CheckDepPair = [this](auto &P, auto &E) {
     auto ID = P.first;
 
     // Exclude duplicate IDs by normalising them.
@@ -1837,7 +1837,7 @@ void LKMMVerifier::printBrokenDeps() {
   };
 
   for (auto &VADBP : *BrokenADBs)
-    checkDepPair(VADBP, BrokenADEs);
+    CheckDepPair(VADBP, BrokenADEs);
 }
 
 void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
