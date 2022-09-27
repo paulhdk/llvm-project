@@ -1,5 +1,6 @@
 # source https://nixos.wiki/wiki/LLVM
-with import <nixpkgs> { };
+{ pkgs ? import (fetchTarball "https://github.com/PBHDK/nixpkgs/archive/2eac0c6990719e80fd56d89b1f48e7a5bf59b843.tar.gz") { }
+}:
 let
   myPython = pkgs.python310.withPackages (ps: with ps; [
     autopep8
@@ -8,20 +9,19 @@ let
     pygments
   ]);
 in
-(mkShell.override {
-  stdenv = llvmPackages_14.stdenv;
-}) {
+pkgs.llvmPackages_latest.stdenv.mkDerivation {
+  name = "llvm-debug";
   nativeBuildInputs = [
-    bashInteractive
-    ccache
-    gdb
-    cmake
-    clang-tools
-    ninja
-    graphviz
+    pkgs.bashInteractive
+    pkgs.ccache
+    pkgs.gdb
+    pkgs.cmake
+    pkgs.clang-tools
+    pkgs.ninja
+    pkgs.graphviz
     myPython
-    llvmPackages_14.lld
-    llvmPackages_14.lldb
+    pkgs.llvmPackages_latest.lld
+    pkgs.llvmPackages_latest.lldb
   ];
 
   disableHardening = true;
