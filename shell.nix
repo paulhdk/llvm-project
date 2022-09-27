@@ -16,7 +16,6 @@ pkgs.llvmPackages_latest.stdenv.mkDerivation {
     pkgs.ccache
     pkgs.gdb
     pkgs.cmake
-    pkgs.clang-tools
     pkgs.ninja
     pkgs.graphviz
     myPython
