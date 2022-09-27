@@ -3,27 +3,6 @@
     "configurations": [
         {
             "preLaunchTask": "produceCompileArgsFile",
-            "name": "Debug Module",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/bin/clang",
-            "stopAtEntry": false,
-            "args": [
-                "${input:CompileCmdArgs}"
-            ],
-            "cwd": "${env:LINUX}",
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true,
-                }
-            ]
-        },
-        {
-            "preLaunchTask": "produceCompileArgsFile",
             "preRunCommands": [
                 "command script import setup_LLDB_args.py"
             ],
