@@ -22,7 +22,8 @@ def configure_llvm():
 
 
 def build_llvm(target):
-    subprocess.run(["ninja", target, "-j", "128"], check=True)
+    subprocess.run(["cmake", "--build", ".", "--target",
+                   target, "-j", "128"], check=True)
 
 
 if __name__ == "__main__":
