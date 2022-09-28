@@ -44,11 +44,16 @@
 // FIXME: Brakcets with multiple levels of conditionals
 
 namespace llvm {
-// Enable tests conditionally via command line opt
 static cl::opt<bool> InjectBugs(
     "lkmm-enable-tests",
     cl::desc("Enable the LKMM dependency checker tests. Requires the tests "
              "to be present in the source tree of the kernel being compiled"),
+    cl::Hidden, cl::init(false));
+
+static cl::opt<bool> FullToPartialOpt(
+    "enable-lkmm-addr-warnings",
+    cl::desc("Enable warnings for LKMM addr dependencies based on full to "
+             "partial addr dependency conversion"),
     cl::Hidden, cl::init(false));
 
 namespace {
@@ -447,7 +452,7 @@ private:
 
 class VerDepHalf : public DepHalf {
 public:
-  enum BrokenByType { BrokenDC, ParToFull };
+  enum BrokenByType { BrokenDC, FullToPart };
 
   void setBrokenBy(BrokenByType BB) { BrokenBy = BB; }
 
@@ -455,7 +460,7 @@ public:
     switch (BrokenBy) {
     case BrokenDC:
       return "by breaking the dependency chain";
-    case ParToFull:
+    case FullToPart:
       return "by converting a partial dependency to a full dependency";
     }
   }
@@ -1602,27 +1607,36 @@ bool VerCtx::handleAddrDepID(string const &ID, Instruction *I,
   if (ADBs.find(ID) != ADBs.end()) {
     auto &ADB = ADBs.at(ID);
 
-    // FIXME condition can be shortened
-    if ((ParsedFullDep && ADB.belongsToAllDepChains(BB, VCmp)) ||
-        ((!ParsedFullDep && ADB.belongsToDepChain(BB, VCmp)))) {
-      return true;
-    }
-
     // We only add the current annotation as a broken ending if the current
     // BFS has seen the beginning ID. If we were to add unconditionally, we
     // might add endings which aren't actually reachable by the corresponding.
     // Such cases may be false positivies.
-    BrokenADEs->emplace(ID, VerAddrDepEnd(I, ID, getFullPath(I),
+
+    // Check for fully broken dependency chain
+    if (!ADB.belongsToDepChain(BB, VCmp)) {
+      BrokenADEs->emplace(ID,
+                          VerAddrDepEnd(I, ID, getFullPath(I),
+                                        getFullPath(I, true), ParsedDepHalfID,
+                                        ParsedPathToViaFiles, ParsedFullDep));
+      BrokenADEs->at(ID).setBrokenBy(VerDepHalf::BrokenByType::BrokenDC);
+      return false;
+    }
+
+    // Check for full to partial conversion iff cl opt is specified
+    if (FullToPartialOpt) {
+      if (ParsedFullDep && ADB.belongsToSomeNotAllDepChains(BB, VCmp)) {
+        BrokenADEs->emplace(ID,
+                            VerAddrDepEnd(I, ID, getFullPath(I),
                                           getFullPath(I, true), ParsedDepHalfID,
                                           ParsedPathToViaFiles, ParsedFullDep));
+        BrokenADEs->at(ID).setBrokenBy(VerDepHalf::BrokenByType::FullToPart);
+        return false;
+      }
+    }
+  } else
+    return false;
 
-    // Identify how the dependency got broken
-    if (!ParsedFullDep && ADB.belongsToAllDepChains(BB, VCmp))
-      BrokenADEs->at(ID).setBrokenBy(VerDepHalf::BrokenByType::ParToFull);
-    else if (!ADB.belongsToDepChain(BB, VCmp))
-      BrokenADEs->at(ID).setBrokenBy(VerDepHalf::BrokenByType::BrokenDC);
-  }
-  return false;
+  return true;
 }
 
 void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
