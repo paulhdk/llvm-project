@@ -5,7 +5,7 @@ import subprocess
 import os
 
 CMAKE_CONFIG_FLAGS = [
-    "-DLLVM_ENABLE_PROJECTS=\"clang;clang-tools-extra;lldb\"",
+    "-DLLVM_ENABLE_PROJECTS=\"clang;clang-tools-extra;lldb;lld\"",
     "-DLLVM_TARGETS_TO_BUILD=\"AArch64;ARM;X86\"",
     "-DLLVM_TARGET_ARCH=\"AArch64\"",
     "-DLLVM_DEFAULT_TARGET_TRIPLE=\"aarch64-unknown-linux-gnu\"",
