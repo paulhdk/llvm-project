@@ -404,10 +404,10 @@ public:
   /// \param DC A DepChain to be used as initial value for the new DepChainPair
   /// at \p BB. In the interprocedural analysis case, \p DC will contain all
   /// function arguments which are part of a DepChain in the calling function.
-  void resetDCMTo(BasicBlock *BB, bool FDep, DepChain &DC) {
+  void resetDCMTo(BasicBlock *BB, bool FDep, DepChain *DC) {
     this->FDep = FDep;
     DCM.clear();
-    DCM.emplace(BB, DepChainPair(DC, DC));
+    DCM.emplace(BB, DepChainPair(*DC, *DC));
   }
 
   /// Resets the DepChainMap
@@ -605,7 +605,7 @@ public:
   /// \param ADBsForCall the PotAddrDepBegs which will be
   ///  carried over to the called function. This map is left untouched if none
   ///  of the call's arguments are part of a DepChain.
-  void handleDependentFunctionArgs(CallInst *CI, BasicBlock *BB);
+  void handleDependentFunctionArgs(CallInst *CI, BasicBlock *FirstBB);
 
   //===--------------------------------------------------------------------===//
   // Visitor Functions
@@ -725,7 +725,7 @@ protected:
   ///
   /// \param BB the first BasicBlock in the called function.
   /// \param CallI the call instruction whose called function begins with \p BB.
-  void prepareInterproc(BasicBlock *BB, CallInst *CallI);
+  void prepareInterproc(BasicBlock *FirstBB, CallInst *CallI);
 
   /// Spawns an interprocedural BFS from the current context.
   ///
@@ -749,7 +749,7 @@ protected:
   /// \returns true if all of \p CallI's arguments are part of all of \p ADB's
   ///  DepChains.
   bool allFunctionArgsPartOfAllDepChains(PotAddrDepBeg &ADB, CallInst *CallI,
-                                         unordered_set<Value *> &DependentArgs);
+                                         DepChain *DependentArgs);
 
   /// Returns the current limit for interprocedural annotation / verification
   ///
@@ -879,8 +879,8 @@ public:
 
   // Creates an AnnotCtx for exploring a called function.
   // FIXME Nearly identical to VerCtx's copy constructor. Can we template this?
-  AnnotCtx(AnnotCtx &AC, BasicBlock *BB, CallInst *CallI) : AnnotCtx(AC) {
-    prepareInterproc(BB, CallI);
+  AnnotCtx(AnnotCtx &AC, BasicBlock *FirstBB, CallInst *CallI) : AnnotCtx(AC) {
+    prepareInterproc(FirstBB, CallI);
     ReturnedADBs.clear();
   }
 
@@ -908,8 +908,8 @@ public:
   // Creates a VerCtx for exploring a called function.
   // FIXME Nearly identical to AnnotCtx's copy constructor. Can we template
   // this?
-  VerCtx(VerCtx &VC, BasicBlock *BB, CallInst *CallI) : VerCtx(VC) {
-    prepareInterproc(BB, CallI);
+  VerCtx(VerCtx &VC, BasicBlock *FirstBB, CallInst *CallI) : VerCtx(VC) {
+    prepareInterproc(FirstBB, CallI);
     ReturnedADBs.clear();
   }
 
@@ -1235,7 +1235,7 @@ void BFSCtx::deleteAddrDepDCsAt(BasicBlock *BB,
     ADBP.second.deleteDCsAt(BB, BEDs);
 }
 
-void BFSCtx::handleDependentFunctionArgs(CallInst *CallI, BasicBlock *BB) {
+void BFSCtx::handleDependentFunctionArgs(CallInst *CallI, BasicBlock *FirstBB) {
   DepChain DependentArgs;
   auto *CalledF = CallI->getCalledFunction();
 
@@ -1243,7 +1243,7 @@ void BFSCtx::handleDependentFunctionArgs(CallInst *CallI, BasicBlock *BB) {
     auto &ParsedID = ADBP.first;
     auto &ADB = ADBP.second;
 
-    bool FDep = allFunctionArgsPartOfAllDepChains(ADB, CallI, DependentArgs);
+    bool FDep = allFunctionArgsPartOfAllDepChains(ADB, CallI, &DependentArgs);
 
     // Instead of deleting an ADB if it doesn't run into a function, we keep it
     // with an empty DCM, thereby ensuring that no further items can be added to
@@ -1259,7 +1259,7 @@ void BFSCtx::handleDependentFunctionArgs(CallInst *CallI, BasicBlock *BB) {
         if (auto *VC = dyn_cast<VerCtx>(this))
           VC->markIDAsVerified(ParsedID);
       } else {
-        ADB.resetDCMTo(BB, FDep, DependentArgs);
+        ADB.resetDCMTo(FirstBB, FDep, &DependentArgs);
         ADB.addStepToPathFrom(CallI);
       }
     }
@@ -1268,12 +1268,12 @@ void BFSCtx::handleDependentFunctionArgs(CallInst *CallI, BasicBlock *BB) {
   }
 }
 
-void BFSCtx::prepareInterproc(BasicBlock *BB, CallInst *CallI) {
-  handleDependentFunctionArgs(CallI, BB);
+void BFSCtx::prepareInterproc(BasicBlock *FirstBB, CallInst *CallI) {
+  handleDependentFunctionArgs(CallI, FirstBB);
 
   CallPath->push_back(CallI);
 
-  this->BB = BB;
+  this->BB = FirstBB;
 }
 
 // FIXME Duplciate code
@@ -1299,9 +1299,9 @@ constexpr unsigned BFSCtx::currentLimit() const {
   llvm_unreachable("called currentLimit with unhandled subclass.");
 }
 
-bool BFSCtx::allFunctionArgsPartOfAllDepChains(
-    PotAddrDepBeg &ADB, CallInst *CallI,
-    unordered_set<Value *> &DependentArgs) {
+bool BFSCtx::allFunctionArgsPartOfAllDepChains(PotAddrDepBeg &ADB,
+                                               CallInst *CallI,
+                                               DepChain *DependentArgs) {
   bool FDep = ADB.canBeFullDependency();
   auto *CalledF = CallI->getCalledFunction();
 
@@ -1318,9 +1318,9 @@ bool BFSCtx::allFunctionArgsPartOfAllDepChains(
       FDep = false;
 
     if (!CalledF->isVarArg())
-      DependentArgs.insert(CalledF->getArg(Ind));
+      DependentArgs->insert(CalledF->getArg(Ind));
     else
-      DependentArgs.insert(VCmp);
+      DependentArgs->insert(VCmp);
   }
 
   return FDep;
