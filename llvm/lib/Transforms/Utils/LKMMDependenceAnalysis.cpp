@@ -278,6 +278,10 @@ public:
   /// \returns true if the PotAddrDepBeg has dep chains at \p BB.
   bool isAt(BasicBlock *BB) const { return DCM.find(BB) != DCM.end(); }
 
+  DepChainPair getDCsAt(BasicBlock *BB) const {
+    return isAt(BB) ? DCM.at(BB) : DepChainPair();
+  }
+
   /// Checks whether this PotAddrDepBeg begins at a given instruction.
   ///
   /// \param I the instruction to be checked.
@@ -416,7 +420,9 @@ public:
   /// DepChainMap will be completely empty.
   ///
   /// \Returns true if the DepChainMap is completely empty.
-  bool isDepChainMapEmpty() { return DCM.empty(); }
+  bool isDepChainMapEmpty() const { return DCM.empty(); }
+
+  DepChainMap &&getDCM() { return std::move(DCM); }
 
   static bool classof(const DepHalf *VDH) {
     return VDH->getKind() == DK_AddrBeg;
@@ -509,9 +515,17 @@ public:
       : VerDepHalf(I, ParsedID, DepHalfID, PathToViaFiles, ParsedPathTo,
                    ParsedPathToViaFiles, DK_VerAddrBeg) {}
 
+  void setDCP(DepChainPair DCP) { this->DCP = DCP; }
+  DepChainPair &getDCP() { return DCP; }
+
   static bool classof(const DepHalf *VDH) {
     return VDH->getKind() == DK_VerAddrBeg;
   }
+
+private:
+  // Gets populated at the end of the BFS and is used for printing the dep
+  // chain to users.
+  DepChainPair DCP;
 };
 
 class VerAddrDepEnd : public VerDepHalf {
@@ -1629,11 +1643,15 @@ bool VerCtx::handleAddrDepID(string const &ID, Instruction *I,
 
     // Check for fully broken dependency chain
     if (!ADB.belongsToDepChain(BB, VCmp)) {
-      BrokenADEs->emplace(ID,
-                          VerAddrDepEnd(I, ID, getFullPath(I),
-                                        getFullPath(I, true), ParsedDepHalfID,
-                                        ParsedPathToViaFiles, ParsedFullDep));
-      BrokenADEs->at(ID).setBrokenBy(VerDepHalf::BrokenByType::BrokenDC);
+      auto &VADB = BrokenADBs->at(ID);
+      auto VADE =
+          VerAddrDepEnd(I, ID, getFullPath(I), getFullPath(I, true),
+                        ParsedDepHalfID, ParsedPathToViaFiles, ParsedFullDep);
+
+      VADB.setDCP(ADB.getDCsAt(BB));
+      VADE.setBrokenBy(VerDepHalf::BrokenByType::BrokenDC);
+
+      BrokenADEs->emplace(ID, std::move(VADE));
       return false;
     }
 
@@ -1896,6 +1914,27 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
            << "\n";
 
   errs() << "Broken " << End.getBrokenBy() << "\n";
+
+  if (auto *VADB = dyn_cast<VerAddrDepBeg>(&Beg)) {
+    auto &DCP = VADB->getDCP();
+    auto &DCInter = DCP.first;
+    auto &DCUnion = DCP.second;
+
+    errs() << "DCInter at ";
+    End.getInst()->print(errs());
+    errs() << "\n";
+
+    for (auto *V : DCInter) {
+      V->print(errs());
+      errs() << "\n";
+    }
+
+    errs() << "\nDCUnion:\n";
+    for (auto *V : DCUnion) {
+      V->print(errs());
+      errs() << "\n";
+    }
+  }
 
 #define DEBUG_TYPE "lkmm-print-modules"
   LLVM_DEBUG(dbgs() << "\nFirst access in optimised IR\n\n"
