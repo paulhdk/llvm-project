@@ -1237,7 +1237,6 @@ void BFSCtx::deleteAddrDepDCsAt(BasicBlock *BB,
 
 void BFSCtx::handleDependentFunctionArgs(CallInst *CallI, BasicBlock *FirstBB) {
   DepChain DependentArgs;
-  auto *CalledF = CallI->getCalledFunction();
 
   for (auto &ADBP : ADBs) {
     auto &ParsedID = ADBP.first;
@@ -1249,15 +1248,15 @@ void BFSCtx::handleDependentFunctionArgs(CallInst *CallI, BasicBlock *FirstBB) {
     // with an empty DCM, thereby ensuring that no further items can be added to
     // the DepChain until control flow returns to this function, but still
     // allowing an ending to be mapped to it when verifying.
-    if (DependentArgs.empty())
+    if (DependentArgs.empty()) {
       ADB.clearDCMap();
-    else {
-      // Mark dependencies through external or empty functions as trivially
-      // verified
-      if (CalledF->hasExternalLinkage() || CalledF->isIntrinsic() ||
-          CalledF->isVarArg() || CalledF->empty() || CallI->isIndirectCall()) {
-        if (auto *VC = dyn_cast<VerCtx>(this))
+    } else {
+      if (!FirstBB) {
+        if (auto *VC = dyn_cast<VerCtx>(this)) {
+          // Mark dependencies through external or empty functions as trivially
+          // verified
           VC->markIDAsVerified(ParsedID);
+        }
       } else {
         ADB.resetDCMTo(FirstBB, FDep, &DependentArgs);
         ADB.addStepToPathFrom(CallI);
@@ -1317,10 +1316,14 @@ bool BFSCtx::allFunctionArgsPartOfAllDepChains(PotAddrDepBeg &ADB,
     if (!ADB.belongsToAllDepChains(BB, CallI->getArgOperand(Ind)))
       FDep = false;
 
-    if (!CalledF->isVarArg())
-      DependentArgs->insert(CalledF->getArg(Ind));
-    else
-      DependentArgs->insert(VCmp);
+    if (CalledF)
+      if (!CalledF->isVarArg()) {
+        DependentArgs->insert(CalledF->getArg(Ind));
+        continue;
+      }
+
+    // CalledF is null or CalledF is variadic
+    DependentArgs->insert(VCmp);
   }
 
   return FDep;
@@ -1423,21 +1426,27 @@ void BFSCtx::visitInstruction(Instruction &I) {
 void BFSCtx::visitCallInst(CallInst &CallI) {
   auto *CalledF = CallI.getCalledFunction();
 
-  if (!CalledF)
-    return;
-
   if (recLevel() > currentLimit())
     return;
 
-  // Skip intrinsics, external functions ... of type void
-  if (CalledF->empty() && CalledF->getReturnType()->isVoidTy())
-    return;
+  // FirstBB being nullptr implies that the function should be skipped, but the
+  // call's arguments should still be looked at. For example, if this is a call
+  // to a function with external linkage, the analysis won't be able to follow
+  // the call, but the call's arguments should still be checked against current
+  // dep chains. If they are part of any dep chain, the corresponding dependency
+  // is marked as trivially verified as we want to avoid false positives here.
+  // Similarly for calls to intrinsics or indirect calls.
+  BasicBlock *FirstBB;
+
+  // FIXME: CallI.isIndirectCall() == !CalledFunction ?
+  if (!CalledF || CalledF->hasExternalLinkage() || CalledF->isIntrinsic() ||
+      CalledF->isVarArg() || CalledF->empty() || CallI.isIndirectCall())
+    FirstBB = nullptr;
+  else
+    FirstBB = &*CalledF->begin();
 
   InterprocBFSRes Ret;
 
-  auto *FirstBB = CalledF->empty() ? nullptr : &*CalledF->begin();
-
-  // FIXME redundant checks?
   if (isa<AnnotCtx>(this))
     Ret = runInterprocBFS(FirstBB, &CallI);
   else if (isa<VerCtx>(this))
