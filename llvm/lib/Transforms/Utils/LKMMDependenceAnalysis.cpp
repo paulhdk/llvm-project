@@ -909,6 +909,24 @@ public:
   ///  annotation(s).
   void handleDepAnnotations(Instruction *I, MDNode *MDAnnotation);
 
+  void markIDAsVerified(string ParsedID) {
+    auto DelId = [](auto &ID, auto &Bs, auto &Es, auto &RemappedIDs) {
+      Bs->erase(ID);
+      Es->erase(ID);
+
+      if (RemappedIDs->find(ID) != RemappedIDs->end())
+        for (auto const &ReID : RemappedIDs->at(ID)) {
+          Bs->erase(ReID);
+          Es->erase(ReID);
+        }
+    };
+
+    DelId(ParsedID, BrokenADBs, BrokenADEs, RemappedIDs);
+
+    VerifiedIDs->insert(ParsedID);
+    RemappedIDs->erase(ParsedID);
+  }
+
   static bool classof(const BFSCtx *C) { return C->getKind() == CK_Ver; }
 
 private:
@@ -950,24 +968,6 @@ private:
       RemappedIDs->at(ID).insert(ID + "-#" + to_string(S + 1));
       ID = ID + "-#" + to_string(S + 1);
     }
-  }
-
-  void markIDAsVerified(string &ParsedID) {
-    auto DelId = [](auto &ID, auto &Bs, auto &Es, auto &RemappedIDs) {
-      Bs->erase(ID);
-      Es->erase(ID);
-
-      if (RemappedIDs->find(ID) != RemappedIDs->end())
-        for (auto const &ReID : RemappedIDs->at(ID)) {
-          Bs->erase(ReID);
-          Es->erase(ReID);
-        }
-    };
-
-    DelId(ParsedID, BrokenADBs, BrokenADEs, RemappedIDs);
-
-    VerifiedIDs->insert(ParsedID);
-    RemappedIDs->erase(ParsedID);
   }
 };
 
@@ -1176,6 +1176,11 @@ bool PotAddrDepBeg::depChainsShareValue(
 //===----------------------------------------------------------------------===//
 
 void BFSCtx::runBFS() {
+  // BB might be null when runBFS gets called for a function with external
+  // linkage for example
+  if (!BB)
+    return;
+
   // Maps a BB to the set of its back edge destinations (BEDs).
   BBtoBBSetMap BEDsForBB;
 
@@ -1226,8 +1231,10 @@ void BFSCtx::deleteAddrDepDCsAt(BasicBlock *BB,
 
 void BFSCtx::handleDependentFunctionArgs(CallInst *CallI, BasicBlock *BB) {
   DepChain DependentArgs;
+  auto *CalledF = CallI->getCalledFunction();
 
   for (auto &ADBP : ADBs) {
+    auto &ParsedID = ADBP.first;
     auto &ADB = ADBP.second;
 
     bool FDep = allFunctionArgsPartOfAllDepChains(ADB, CallI, DependentArgs);
@@ -1239,8 +1246,16 @@ void BFSCtx::handleDependentFunctionArgs(CallInst *CallI, BasicBlock *BB) {
     if (DependentArgs.empty())
       ADB.clearDCMap();
     else {
-      ADB.resetDCMTo(BB, FDep, DependentArgs);
-      ADB.addStepToPathFrom(CallI);
+      // Mark dependencies through external or empty functions as trivially
+      // verified
+      if (CalledF->hasExternalLinkage() || CalledF->isIntrinsic() ||
+          CalledF->isVarArg() || CalledF->empty() || CallI->isIndirectCall()) {
+        if (auto *VC = dyn_cast<VerCtx>(this))
+          VC->markIDAsVerified(ParsedID);
+      } else {
+        ADB.resetDCMTo(BB, FDep, DependentArgs);
+        ADB.addStepToPathFrom(CallI);
+      }
     }
 
     DependentArgs.clear();
@@ -1282,6 +1297,7 @@ bool BFSCtx::allFunctionArgsPartOfAllDepChains(
     PotAddrDepBeg &ADB, CallInst *CallI,
     unordered_set<Value *> &DependentArgs) {
   bool FDep = ADB.canBeFullDependency();
+  auto *CalledF = CallI->getCalledFunction();
 
   if (!ADB.areAllDepChainsAt(BB))
     FDep = false;
@@ -1295,7 +1311,10 @@ bool BFSCtx::allFunctionArgsPartOfAllDepChains(
     if (!ADB.belongsToAllDepChains(BB, CallI->getArgOperand(Ind)))
       FDep = false;
 
-    DependentArgs.insert(CallI->getCalledFunction()->getArg(Ind));
+    if (!CalledF->isVarArg())
+      DependentArgs.insert(CalledF->getArg(Ind));
+    else
+      DependentArgs.insert(VCmp);
   }
 
   return FDep;
@@ -1401,19 +1420,22 @@ void BFSCtx::visitCallInst(CallInst &CallI) {
   if (!CalledF)
     return;
 
-  if (CalledF->empty() || CalledF->isVarArg())
+  if (recLevel() > currentLimit())
     return;
 
-  if (recLevel() > currentLimit())
+  // Skip intrinsics, external functions ... of type void
+  if (CalledF->empty() && CalledF->getReturnType()->isVoidTy())
     return;
 
   InterprocBFSRes Ret;
 
+  auto *FirstBB = CalledF->empty() ? nullptr : &*CalledF->begin();
+
   // FIXME redundant checks?
   if (isa<AnnotCtx>(this))
-    Ret = runInterprocBFS(&*CalledF->begin(), &CallI);
+    Ret = runInterprocBFS(FirstBB, &CallI);
   else if (isa<VerCtx>(this))
-    Ret = runInterprocBFS(&*CalledF->begin(), &CallI);
+    Ret = runInterprocBFS(FirstBB, &CallI);
 
   auto &RADBsFromCall = Ret;
 
@@ -1515,7 +1537,7 @@ void BFSCtx::handleLoadStoreInst(Instruction &I) {
   for (auto &ADBP : ADBs) {
     auto &ADB = ADBP.second;
 
-    if (I.isVolatile())
+    if (I.isVolatile()) {
       if (isa<AnnotCtx>(this)) {
         if (ADB.belongsToAllDepChains(BB, VEnd) && ADB.canBeFullDependency())
           ADB.addAddrDep(getInstLocString(&I), getFullPath(&I, true), &I, true);
@@ -1523,6 +1545,7 @@ void BFSCtx::handleLoadStoreInst(Instruction &I) {
           ADB.addAddrDep(getInstLocString(&I), getFullPath(&I, true), &I,
                          false);
       }
+    }
 
     ADB.tryAddValueToDepChains(&I, I.getOperand(0), VAdd);
   }
