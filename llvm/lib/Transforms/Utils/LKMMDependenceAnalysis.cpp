@@ -1088,7 +1088,7 @@ bool PotAddrDepBeg::tryAddValueToDepChains(Instruction *I, Value *VCmp,
   if (isa<ConstantData>(VAdd))
     return false;
 
-  auto Ret = false;
+  auto Ret(false);
 
   auto &DCP = DCM.at(I->getParent());
 
@@ -1099,20 +1099,12 @@ bool PotAddrDepBeg::tryAddValueToDepChains(Instruction *I, Value *VCmp,
   if (DCInter.find(VCmp) != DCInter.end()) {
     DCInter.insert(VAdd);
     Ret = true;
-  } else if (isa<StoreInst>(I)) {
-    auto *PotRedefOp = I->getOperand(1);
-    if (DCInter.find(PotRedefOp) != DCInter.end())
-      DCInter.erase(PotRedefOp);
   }
 
   // Add to DCUnion and account for redefinition
   if (DCUnion.find(VCmp) != DCUnion.end()) {
     DCUnion.insert(VAdd);
     Ret = true;
-  } else if (isa<StoreInst>(I)) {
-    auto *PotRedefOp = I->getOperand(1);
-    if (DCUnion.find(PotRedefOp) != DCUnion.end())
-      DCUnion.erase(PotRedefOp);
   }
 
   return Ret;
