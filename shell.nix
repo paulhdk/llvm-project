@@ -10,7 +10,7 @@ let
   ]);
 in
 pkgs.llvmPackages_latest.stdenv.mkDerivation {
-  name = "llvm-debug";
+  name = "llvm-debug-env";
   nativeBuildInputs = [
     pkgs.bashInteractive
     pkgs.ccache
