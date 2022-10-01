@@ -278,6 +278,10 @@ public:
   /// \returns true if the PotAddrDepBeg has dep chains at \p BB.
   bool isAt(BasicBlock *BB) const { return DCM.find(BB) != DCM.end(); }
 
+  DepChainPair getDCsAt(BasicBlock *BB) const {
+    return isAt(BB) ? DCM.at(BB) : DepChainPair();
+  }
+
   /// Checks whether this PotAddrDepBeg begins at a given instruction.
   ///
   /// \param I the instruction to be checked.
@@ -400,10 +404,10 @@ public:
   /// \param DC A DepChain to be used as initial value for the new DepChainPair
   /// at \p BB. In the interprocedural analysis case, \p DC will contain all
   /// function arguments which are part of a DepChain in the calling function.
-  void resetDCMTo(BasicBlock *BB, bool FDep, DepChain &DC) {
+  void resetDCMTo(BasicBlock *BB, bool FDep, DepChain *DC) {
     this->FDep = FDep;
     DCM.clear();
-    DCM.emplace(BB, DepChainPair(DC, DC));
+    DCM.emplace(BB, DepChainPair(*DC, *DC));
   }
 
   /// Resets the DepChainMap
@@ -416,7 +420,9 @@ public:
   /// DepChainMap will be completely empty.
   ///
   /// \Returns true if the DepChainMap is completely empty.
-  bool isDepChainMapEmpty() { return DCM.empty(); }
+  bool isDepChainMapEmpty() const { return DCM.empty(); }
+
+  DepChainMap &&getDCM() { return std::move(DCM); }
 
   static bool classof(const DepHalf *VDH) {
     return VDH->getKind() == DK_AddrBeg;
@@ -509,9 +515,17 @@ public:
       : VerDepHalf(I, ParsedID, DepHalfID, PathToViaFiles, ParsedPathTo,
                    ParsedPathToViaFiles, DK_VerAddrBeg) {}
 
+  void setDCP(DepChainPair DCP) { this->DCP = DCP; }
+  DepChainPair &getDCP() { return DCP; }
+
   static bool classof(const DepHalf *VDH) {
     return VDH->getKind() == DK_VerAddrBeg;
   }
+
+private:
+  // Gets populated at the end of the BFS and is used for printing the dep
+  // chain to users.
+  DepChainPair DCP;
 };
 
 class VerAddrDepEnd : public VerDepHalf {
@@ -591,7 +605,7 @@ public:
   /// \param ADBsForCall the PotAddrDepBegs which will be
   ///  carried over to the called function. This map is left untouched if none
   ///  of the call's arguments are part of a DepChain.
-  void handleDependentFunctionArgs(CallInst *CI, BasicBlock *BB);
+  void handleDependentFunctionArgs(CallInst *CI, BasicBlock *FirstBB);
 
   //===--------------------------------------------------------------------===//
   // Visitor Functions
@@ -711,7 +725,7 @@ protected:
   ///
   /// \param BB the first BasicBlock in the called function.
   /// \param CallI the call instruction whose called function begins with \p BB.
-  void prepareInterproc(BasicBlock *BB, CallInst *CallI);
+  void prepareInterproc(BasicBlock *FirstBB, CallInst *CallI);
 
   /// Spawns an interprocedural BFS from the current context.
   ///
@@ -735,7 +749,7 @@ protected:
   /// \returns true if all of \p CallI's arguments are part of all of \p ADB's
   ///  DepChains.
   bool allFunctionArgsPartOfAllDepChains(PotAddrDepBeg &ADB, CallInst *CallI,
-                                         unordered_set<Value *> &DependentArgs);
+                                         DepChain *DependentArgs);
 
   /// Returns the current limit for interprocedural annotation / verification
   ///
@@ -865,8 +879,8 @@ public:
 
   // Creates an AnnotCtx for exploring a called function.
   // FIXME Nearly identical to VerCtx's copy constructor. Can we template this?
-  AnnotCtx(AnnotCtx &AC, BasicBlock *BB, CallInst *CallI) : AnnotCtx(AC) {
-    prepareInterproc(BB, CallI);
+  AnnotCtx(AnnotCtx &AC, BasicBlock *FirstBB, CallInst *CallI) : AnnotCtx(AC) {
+    prepareInterproc(FirstBB, CallI);
     ReturnedADBs.clear();
   }
 
@@ -894,8 +908,8 @@ public:
   // Creates a VerCtx for exploring a called function.
   // FIXME Nearly identical to AnnotCtx's copy constructor. Can we template
   // this?
-  VerCtx(VerCtx &VC, BasicBlock *BB, CallInst *CallI) : VerCtx(VC) {
-    prepareInterproc(BB, CallI);
+  VerCtx(VerCtx &VC, BasicBlock *FirstBB, CallInst *CallI) : VerCtx(VC) {
+    prepareInterproc(FirstBB, CallI);
     ReturnedADBs.clear();
   }
 
@@ -1221,31 +1235,30 @@ void BFSCtx::deleteAddrDepDCsAt(BasicBlock *BB,
     ADBP.second.deleteDCsAt(BB, BEDs);
 }
 
-void BFSCtx::handleDependentFunctionArgs(CallInst *CallI, BasicBlock *BB) {
+void BFSCtx::handleDependentFunctionArgs(CallInst *CallI, BasicBlock *FirstBB) {
   DepChain DependentArgs;
-  auto *CalledF = CallI->getCalledFunction();
 
   for (auto &ADBP : ADBs) {
     auto &ParsedID = ADBP.first;
     auto &ADB = ADBP.second;
 
-    bool FDep = allFunctionArgsPartOfAllDepChains(ADB, CallI, DependentArgs);
+    bool FDep = allFunctionArgsPartOfAllDepChains(ADB, CallI, &DependentArgs);
 
     // Instead of deleting an ADB if it doesn't run into a function, we keep it
     // with an empty DCM, thereby ensuring that no further items can be added to
     // the DepChain until control flow returns to this function, but still
     // allowing an ending to be mapped to it when verifying.
-    if (DependentArgs.empty())
+    if (DependentArgs.empty()) {
       ADB.clearDCMap();
-    else {
-      // Mark dependencies through external or empty functions as trivially
-      // verified
-      if (CalledF->hasExternalLinkage() || CalledF->isIntrinsic() ||
-          CalledF->isVarArg() || CalledF->empty() || CallI->isIndirectCall()) {
-        if (auto *VC = dyn_cast<VerCtx>(this))
+    } else {
+      if (!FirstBB) {
+        if (auto *VC = dyn_cast<VerCtx>(this)) {
+          // Mark dependencies through external or empty functions as trivially
+          // verified
           VC->markIDAsVerified(ParsedID);
+        }
       } else {
-        ADB.resetDCMTo(BB, FDep, DependentArgs);
+        ADB.resetDCMTo(FirstBB, FDep, &DependentArgs);
         ADB.addStepToPathFrom(CallI);
       }
     }
@@ -1254,12 +1267,12 @@ void BFSCtx::handleDependentFunctionArgs(CallInst *CallI, BasicBlock *BB) {
   }
 }
 
-void BFSCtx::prepareInterproc(BasicBlock *BB, CallInst *CallI) {
-  handleDependentFunctionArgs(CallI, BB);
+void BFSCtx::prepareInterproc(BasicBlock *FirstBB, CallInst *CallI) {
+  handleDependentFunctionArgs(CallI, FirstBB);
 
   CallPath->push_back(CallI);
 
-  this->BB = BB;
+  this->BB = FirstBB;
 }
 
 // FIXME Duplciate code
@@ -1285,9 +1298,9 @@ constexpr unsigned BFSCtx::currentLimit() const {
   llvm_unreachable("called currentLimit with unhandled subclass.");
 }
 
-bool BFSCtx::allFunctionArgsPartOfAllDepChains(
-    PotAddrDepBeg &ADB, CallInst *CallI,
-    unordered_set<Value *> &DependentArgs) {
+bool BFSCtx::allFunctionArgsPartOfAllDepChains(PotAddrDepBeg &ADB,
+                                               CallInst *CallI,
+                                               DepChain *DependentArgs) {
   bool FDep = ADB.canBeFullDependency();
   auto *CalledF = CallI->getCalledFunction();
 
@@ -1303,10 +1316,14 @@ bool BFSCtx::allFunctionArgsPartOfAllDepChains(
     if (!ADB.belongsToAllDepChains(BB, CallI->getArgOperand(Ind)))
       FDep = false;
 
-    if (!CalledF->isVarArg())
-      DependentArgs.insert(CalledF->getArg(Ind));
-    else
-      DependentArgs.insert(VCmp);
+    if (CalledF)
+      if (!CalledF->isVarArg()) {
+        DependentArgs->insert(CalledF->getArg(Ind));
+        continue;
+      }
+
+    // CalledF is null or CalledF is variadic
+    DependentArgs->insert(VCmp);
   }
 
   return FDep;
@@ -1409,21 +1426,27 @@ void BFSCtx::visitInstruction(Instruction &I) {
 void BFSCtx::visitCallInst(CallInst &CallI) {
   auto *CalledF = CallI.getCalledFunction();
 
-  if (!CalledF)
-    return;
-
   if (recLevel() > currentLimit())
     return;
 
-  // Skip intrinsics, external functions ... of type void
-  if (CalledF->empty() && CalledF->getReturnType()->isVoidTy())
-    return;
+  // FirstBB being nullptr implies that the function should be skipped, but the
+  // call's arguments should still be looked at. For example, if this is a call
+  // to a function with external linkage, the analysis won't be able to follow
+  // the call, but the call's arguments should still be checked against current
+  // dep chains. If they are part of any dep chain, the corresponding dependency
+  // is marked as trivially verified as we want to avoid false positives here.
+  // Similarly for calls to intrinsics or indirect calls.
+  BasicBlock *FirstBB;
+
+  // FIXME: CallI.isIndirectCall() == !CalledFunction ?
+  if (!CalledF || CalledF->hasExternalLinkage() || CalledF->isIntrinsic() ||
+      CalledF->isVarArg() || CalledF->empty() || CallI.isIndirectCall())
+    FirstBB = nullptr;
+  else
+    FirstBB = &*CalledF->begin();
 
   InterprocBFSRes Ret;
 
-  auto *FirstBB = CalledF->empty() ? nullptr : &*CalledF->begin();
-
-  // FIXME redundant checks?
   if (isa<AnnotCtx>(this))
     Ret = runInterprocBFS(FirstBB, &CallI);
   else if (isa<VerCtx>(this))
@@ -1629,11 +1652,15 @@ bool VerCtx::handleAddrDepID(string const &ID, Instruction *I,
 
     // Check for fully broken dependency chain
     if (!ADB.belongsToDepChain(BB, VCmp)) {
-      BrokenADEs->emplace(ID,
-                          VerAddrDepEnd(I, ID, getFullPath(I),
-                                        getFullPath(I, true), ParsedDepHalfID,
-                                        ParsedPathToViaFiles, ParsedFullDep));
-      BrokenADEs->at(ID).setBrokenBy(VerDepHalf::BrokenByType::BrokenDC);
+      auto &VADB = BrokenADBs->at(ID);
+      auto VADE =
+          VerAddrDepEnd(I, ID, getFullPath(I), getFullPath(I, true),
+                        ParsedDepHalfID, ParsedPathToViaFiles, ParsedFullDep);
+
+      VADB.setDCP(ADB.getDCsAt(BB));
+      VADE.setBrokenBy(VerDepHalf::BrokenByType::BrokenDC);
+
+      BrokenADEs->emplace(ID, std::move(VADE));
       return false;
     }
 
@@ -1895,31 +1922,73 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
     errs() << "\nFull dependency: " << (VADE->getParsedFullDep() ? "yes" : "no")
            << "\n";
 
-  errs() << "Broken " << End.getBrokenBy() << "\n";
+  errs() << "\nBroken " << End.getBrokenBy() << "\n\n";
+
+  if (auto *VADB = dyn_cast<VerAddrDepBeg>(&Beg)) {
+    auto &DCP = VADB->getDCP();
+    auto &DCInter = DCP.first;
+    auto &DCUnion = DCP.second;
+
+    errs() << "Soure-level dep chains at " << getInstLocString(End.getInst())
+           << "\n";
+
+    errs() << "\nIntersection of all dependency chains at the ending:\n";
+    for (auto *V : DCInter)
+      errs() << getInstLocString(cast<Instruction>(V)) << "\n";
+
+    errs() << "\nUnion of all dependency chains at the ending:\n";
+    for (auto *V : DCUnion)
+      errs() << getInstLocString(cast<Instruction>(V)) << "\n";
+  }
 
 #define DEBUG_TYPE "lkmm-print-modules"
-  LLVM_DEBUG(dbgs() << "\nFirst access in optimised IR\n\n"
-                    << "inst:\n\t";);
+  LLVM_DEBUG(
+      if (auto *VADB = dyn_cast<VerAddrDepBeg>(&Beg)) {
+        auto &DCP = VADB->getDCP();
+        auto &DCInter = DCP.first;
+        auto &DCUnion = DCP.second;
 
-  LLVM_DEBUG(Beg.getInst()->print(dbgs()));
+        dbgs() << "IR Dep chains at ";
+        End.getInst()->print(dbgs());
+        dbgs() << "\n";
 
-  LLVM_DEBUG(dbgs() << "\noptimised IR function:\n\t"
-                    << Beg.getInst()->getFunction()->getName() << "\n\n");
+        dbgs() << "\nIntersection of all dependency chains at the ending:\n";
+        for (auto *V : DCInter) {
+          V->print(dbgs());
+          dbgs() << "\n";
+        }
 
-  LLVM_DEBUG(dbgs() << "\nSecond access in optimised IR\n\n"
-                    << "inst:\n\t");
+        dbgs() << "\nUnion of all dependency chains at the ending:\n";
+        for (auto *V : DCUnion) {
+          V->print(dbgs());
+          dbgs() << "\n";
+        }
+      }
 
-  LLVM_DEBUG(End.getInst()->print(dbgs()));
+          dbgs()
+          << "\nFirst access in optimised IR\n\n"
+          << "inst:\n\t";
 
-  LLVM_DEBUG(dbgs() << "\nOptimised IR function:\n\t"
-                    << End.getInst()->getFunction()->getName() << "\n\n");
+      Beg.getInst()->print(dbgs());
 
-  if (PrintedModules.find(Beg.getInst()->getModule()) == PrintedModules.end()) {
-    LLVM_DEBUG(dbgs() << "Optimised IR module:\n");
-    LLVM_DEBUG(Beg.getInst()->getModule()->print(dbgs(), nullptr));
+      dbgs() << "\noptimised IR function:\n\t"
+             << Beg.getInst()->getFunction()->getName() << "\n\n";
 
-    PrintedModules.insert(Beg.getInst()->getModule());
-  }
+      dbgs() << "\nSecond access in optimised IR\n\n"
+             << "inst:\n\t";
+
+      End.getInst()->print(dbgs());
+
+      dbgs() << "\nOptimised IR function:\n\t"
+             << End.getInst()->getFunction()->getName() << "\n\n";
+
+      if (PrintedModules.find(Beg.getInst()->getModule()) ==
+          PrintedModules.end()) {
+        dbgs() << "Optimised IR module:\n";
+        Beg.getInst()->getModule()->print(dbgs(), nullptr);
+
+        PrintedModules.insert(Beg.getInst()->getModule());
+      });
 #undef DEBUG_TYPE
 
   errs() << "//"
