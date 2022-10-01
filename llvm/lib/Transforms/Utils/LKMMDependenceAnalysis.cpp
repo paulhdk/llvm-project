@@ -1922,52 +1922,73 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
     errs() << "\nFull dependency: " << (VADE->getParsedFullDep() ? "yes" : "no")
            << "\n";
 
-  errs() << "Broken " << End.getBrokenBy() << "\n";
+  errs() << "\nBroken " << End.getBrokenBy() << "\n\n";
 
   if (auto *VADB = dyn_cast<VerAddrDepBeg>(&Beg)) {
     auto &DCP = VADB->getDCP();
     auto &DCInter = DCP.first;
     auto &DCUnion = DCP.second;
 
-    errs() << "DCInter at ";
-    End.getInst()->print(errs());
-    errs() << "\n";
+    errs() << "Soure-level dep chains at " << getInstLocString(End.getInst())
+           << "\n";
 
-    for (auto *V : DCInter) {
-      V->print(errs());
-      errs() << "\n";
-    }
+    errs() << "\nIntersection of all dependency chains at the ending:\n";
+    for (auto *V : DCInter)
+      errs() << getInstLocString(cast<Instruction>(V)) << "\n";
 
-    errs() << "\nDCUnion:\n";
-    for (auto *V : DCUnion) {
-      V->print(errs());
-      errs() << "\n";
-    }
+    errs() << "\nUnion of all dependency chains at the ending:\n";
+    for (auto *V : DCUnion)
+      errs() << getInstLocString(cast<Instruction>(V)) << "\n";
   }
 
 #define DEBUG_TYPE "lkmm-print-modules"
-  LLVM_DEBUG(dbgs() << "\nFirst access in optimised IR\n\n"
-                    << "inst:\n\t";);
+  LLVM_DEBUG(
+      if (auto *VADB = dyn_cast<VerAddrDepBeg>(&Beg)) {
+        auto &DCP = VADB->getDCP();
+        auto &DCInter = DCP.first;
+        auto &DCUnion = DCP.second;
 
-  LLVM_DEBUG(Beg.getInst()->print(dbgs()));
+        dbgs() << "IR Dep chains at ";
+        End.getInst()->print(dbgs());
+        dbgs() << "\n";
 
-  LLVM_DEBUG(dbgs() << "\noptimised IR function:\n\t"
-                    << Beg.getInst()->getFunction()->getName() << "\n\n");
+        dbgs() << "\nIntersection of all dependency chains at the ending:\n";
+        for (auto *V : DCInter) {
+          V->print(dbgs());
+          dbgs() << "\n";
+        }
 
-  LLVM_DEBUG(dbgs() << "\nSecond access in optimised IR\n\n"
-                    << "inst:\n\t");
+        dbgs() << "\nUnion of all dependency chains at the ending:\n";
+        for (auto *V : DCUnion) {
+          V->print(dbgs());
+          dbgs() << "\n";
+        }
+      }
 
-  LLVM_DEBUG(End.getInst()->print(dbgs()));
+          dbgs()
+          << "\nFirst access in optimised IR\n\n"
+          << "inst:\n\t";
 
-  LLVM_DEBUG(dbgs() << "\nOptimised IR function:\n\t"
-                    << End.getInst()->getFunction()->getName() << "\n\n");
+      Beg.getInst()->print(dbgs());
 
-  if (PrintedModules.find(Beg.getInst()->getModule()) == PrintedModules.end()) {
-    LLVM_DEBUG(dbgs() << "Optimised IR module:\n");
-    LLVM_DEBUG(Beg.getInst()->getModule()->print(dbgs(), nullptr));
+      dbgs() << "\noptimised IR function:\n\t"
+             << Beg.getInst()->getFunction()->getName() << "\n\n";
 
-    PrintedModules.insert(Beg.getInst()->getModule());
-  }
+      dbgs() << "\nSecond access in optimised IR\n\n"
+             << "inst:\n\t";
+
+      End.getInst()->print(dbgs());
+
+      dbgs() << "\nOptimised IR function:\n\t"
+             << End.getInst()->getFunction()->getName() << "\n\n";
+
+      if (PrintedModules.find(Beg.getInst()->getModule()) ==
+          PrintedModules.end()) {
+        dbgs() << "Optimised IR module:\n";
+        Beg.getInst()->getModule()->print(dbgs(), nullptr);
+
+        PrintedModules.insert(Beg.getInst()->getModule());
+      });
 #undef DEBUG_TYPE
 
   errs() << "//"
