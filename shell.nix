@@ -21,11 +21,14 @@ pkgs.llvmPackages_latest.stdenv.mkDerivation {
     myPython
     pkgs.llvmPackages_latest.lld
     pkgs.llvmPackages_latest.lldb
+    pkgs.pkg-config
   ];
+  buildInputs = [ pkgs.zlib ];
   hardeningDisable = [ "all" ];
   shellHook = ''
     export PYTHONPATH='lldb -P'
   '';
   PATH_TO_CLANG = "${pkgs.llvmPackages_latest.stdenv.cc}/bin/clang++";
-
+  # FIXME why is this not included?
+  NIX_LDFLAGS = "-rpath ${pkgs.zlib}/lib";
 }
