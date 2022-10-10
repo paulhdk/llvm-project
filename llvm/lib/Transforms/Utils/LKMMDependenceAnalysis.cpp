@@ -19,6 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Utils/LKMMDependenceAnalysis.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/PostDominators.h"
@@ -84,7 +85,7 @@ template <typename T> using DepHalfMap = unordered_map<string, T>;
 // 'chain' suggests ordering, an unordered set fits better here as a), the
 // algorithm doesn't require the dep chain to be ordered, and b), an unordered
 // set allows constant-time lookup on average.
-using DepChain = unordered_set<Value *>;
+using DepChain = llvm::SetVector<Value *>;
 
 // The DepChainPair type alias reprsents the pair (DCUnion, DCInter) of
 // dependency chains. It exists for every BB the dependency chains of a given
@@ -252,11 +253,6 @@ private:
 
 class PotAddrDepBeg : public DepHalf {
 public:
-  PotAddrDepBeg(Instruction *I, string ID, string PathToViaFiles, Value *V,
-                bool FDep = true)
-      : PotAddrDepBeg(I, ID, PathToViaFiles, DepChain{V}, FDep,
-                      I->getParent()) {}
-
   PotAddrDepBeg(Instruction *I, string ID, string PathToViaFiles, DepChain DC,
                 bool FDep, BasicBlock *BB)
       : DepHalf(I, ID, PathToViaFiles, DK_AddrBeg), DCM(), FDep(FDep) {
@@ -1129,25 +1125,23 @@ bool PotAddrDepBeg::tryAddValueToDepChains(Instruction *I, Value *VCmp,
   // dependency chain.
 
   // Add to DCinter and account for redefinition.
-  if (DCInter.find(VCmp) != DCInter.end()) {
+  if (DCInter.contains(VCmp)) {
     DCInter.insert(VAdd);
     Ret = true;
   } else if (isa<StoreInst>(I)) {
     auto *PotRedefOp = I->getOperand(1);
-    if (DCInter.find(PotRedefOp) != DCInter.end() &&
-        isa<AllocaInst>(PotRedefOp))
-      DCInter.erase(PotRedefOp);
+    if (DCInter.contains(PotRedefOp) && isa<AllocaInst>(PotRedefOp))
+      DCInter.remove(PotRedefOp);
   }
 
   // Add to DCUnion and account for redefinition
-  if (DCUnion.find(VCmp) != DCUnion.end()) {
+  if (DCUnion.contains(VCmp)) {
     DCUnion.insert(VAdd);
     Ret = true;
   } else if (isa<StoreInst>(I)) {
     auto *PotRedefOp = I->getOperand(1);
-    if (DCUnion.find(PotRedefOp) != DCUnion.end() &&
-        isa<AllocaInst>(PotRedefOp))
-      DCUnion.erase(PotRedefOp);
+    if (DCUnion.contains(PotRedefOp) && isa<AllocaInst>(PotRedefOp))
+      DCUnion.remove(PotRedefOp);
   }
 
   return Ret;
@@ -1159,7 +1153,7 @@ bool PotAddrDepBeg::belongsToAllDepChains(BasicBlock *BB, Value *VCmp) const {
 
   auto &DCInter = DCM.at(BB).first;
 
-  return DCInter.find(VCmp) != DCInter.end() && DCM.size() == 1;
+  return DCInter.contains(VCmp) && DCM.size() == 1;
 }
 
 bool PotAddrDepBeg::belongsToDepChain(BasicBlock *BB, Value *VCmp) const {
@@ -1168,7 +1162,7 @@ bool PotAddrDepBeg::belongsToDepChain(BasicBlock *BB, Value *VCmp) const {
 
   auto &DCUnion = DCM.at(BB).second;
 
-  return DCUnion.find(VCmp) != DCUnion.end();
+  return DCUnion.contains(VCmp);
 }
 
 bool PotAddrDepBeg::belongsToSomeNotAllDepChains(BasicBlock *BB,
@@ -1200,7 +1194,7 @@ void PotAddrDepBeg::addAddrDep(string ID2, string PathToViaFiles2,
 bool PotAddrDepBeg::depChainsShareValue(
     list<pair<BasicBlock *, DepChain *>> &DCs, Value *V) const {
   for (auto &DCP : DCs)
-    if (DCP.second->find(V) == DCP.second->end())
+    if (DCP.second->contains(V))
       return false;
 
   return true;
@@ -1482,6 +1476,7 @@ void BFSCtx::visitCallInst(CallInst &CallI) {
     Ret = runInterprocBFS(FirstBB, &CallI);
 
   auto &RADBsFromCall = Ret;
+  auto *VAdd = cast<Value>(&CallI);
 
   // Handle returned addr deps.
   for (auto &RADBP : RADBsFromCall) {
@@ -1494,14 +1489,14 @@ void BFSCtx::visitCallInst(CallInst &CallI) {
       if (RADB.isDepChainMapEmpty())
         continue;
 
-      ADB.addToDCUnion(BB, cast<Value>(&CallI));
+      ADB.addToDCUnion(BB, VAdd);
 
       ADB.setPathFrom(RADB.getPathFrom());
 
       // If not all dep chains from the beginning got returned, FDep might
       // have changed.
       if (RADB.canBeFullDependency())
-        ADB.addToDCInter(BB, cast<Value>(&CallI));
+        ADB.addToDCInter(BB, VAdd);
       else
         ADB.cannotBeFullDependencyAnymore();
 
@@ -1509,7 +1504,9 @@ void BFSCtx::visitCallInst(CallInst &CallI) {
     } else if (RADB.isDepChainMapEmpty()) {
       ADBs.emplace(ID, RADB);
     } else {
-      ADBs.emplace(ID, PotAddrDepBeg(RADB, BB, DepChain{cast<Value>(&CallI)}));
+      DepChain DC;
+      DC.insert(VAdd);
+      ADBs.emplace(ID, PotAddrDepBeg(RADB, BB, DC));
       // FIXME: can this identical second call be avoid by rearanging the
       // branches?
       ADBs.at(ID).addStepToPathFrom(&CallI, true);
@@ -1528,10 +1525,13 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
 
   auto ID = getFullPath(&LoadI);
 
-  if (ADBs.find(ID) == ADBs.end())
-    ADBs.emplace(ID,
-                 PotAddrDepBeg(&LoadI, getInstLocString(&LoadI),
-                               getFullPath(&LoadI, true), cast<Value>(&LoadI)));
+  if (ADBs.find(ID) == ADBs.end()) {
+    DepChain DC;
+    DC.insert(cast<Value>(&LoadI));
+    ADBs.emplace(ID, PotAddrDepBeg(&LoadI, getInstLocString(&LoadI),
+                                   getFullPath(&LoadI, true), DC, true,
+                                   LoadI.getParent()));
+  }
 }
 
 void BFSCtx::visitStoreInst(StoreInst &StoreI) { handleLoadStoreInst(StoreI); }
@@ -1756,9 +1756,11 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       // For tracking the dependency chain, always add a PotAddrDepBeg
       // beginning, no matter if the annotation concerns an address dependency
       // or control dependency beginning.
+      DepChain DC;
+      DC.insert(cast<Value>(I));
       ADBs.emplace(ParsedID,
-                   PotAddrDepBeg(I, getFullPath(I), getFullPath(I, true),
-                                 cast<Value>(I)));
+                   PotAddrDepBeg(I, getFullPath(I), getFullPath(I, true), DC,
+                                 true, I->getParent()));
 
       if (ParsedDepHalfTypeStr.find("address dep") != string::npos)
         // Assume broken until proven wrong.
