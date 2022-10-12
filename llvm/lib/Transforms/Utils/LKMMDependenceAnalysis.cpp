@@ -1102,23 +1102,52 @@ bool PotAddrDepBeg::tryAddValueToDepChains(Instruction *I, Value *VCmp,
   if (isa<ConstantData>(VAdd))
     return false;
 
-  auto Ret(false);
+  auto Ret = false;
 
   auto &DCP = DCM.at(I->getParent());
 
   auto &DCInter = DCP.first;
   auto &DCUnion = DCP.second;
 
+  // A word on how stores can break dependency chains:
+  //
+  // If the second operand of a store is part of a dep chain, the dep chain is
+  // considered broken if that operand is an alloca inst and the first operand
+  // isn't part of the dep chain.
+  //
+  // The reasoning here is that the alloca inst must have been added to the dep
+  // chain via another store instruction whose first operand was part of the dep
+  // chain. If that was the case, then it's not the alloca inst that is part of
+  // the dep chain, but whatever it is pointing to. If that gets overwritting by
+  // a non-dep chain value, the dep chain stops here.
+  //
+  // If the second operand isn't a alloca inst, it wasn't added to the dep chain
+  // via a store instruction, as that would violate SSA. In that case, not the
+  // pointed-to value is part of the dep chain, but the pointer itself. If the
+  // pointer appears as the second operand of a store instruction, only the
+  // value it is pointing to is being overwritten which doesn't break the
+  // dependency chain.
+
   // Add to DCinter and account for redefinition.
   if (DCInter.find(VCmp) != DCInter.end()) {
     DCInter.insert(VAdd);
     Ret = true;
+  } else if (isa<StoreInst>(I)) {
+    auto *PotRedefOp = I->getOperand(1);
+    if (DCInter.find(PotRedefOp) != DCInter.end() &&
+        isa<AllocaInst>(PotRedefOp))
+      DCInter.erase(PotRedefOp);
   }
 
   // Add to DCUnion and account for redefinition
   if (DCUnion.find(VCmp) != DCUnion.end()) {
     DCUnion.insert(VAdd);
     Ret = true;
+  } else if (isa<StoreInst>(I)) {
+    auto *PotRedefOp = I->getOperand(1);
+    if (DCUnion.find(PotRedefOp) != DCUnion.end() &&
+        isa<AllocaInst>(PotRedefOp))
+      DCUnion.erase(PotRedefOp);
   }
 
   return Ret;
