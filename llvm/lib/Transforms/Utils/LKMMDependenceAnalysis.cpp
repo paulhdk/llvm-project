@@ -424,9 +424,14 @@ public:
     return VDH->getKind() == DK_AddrBeg;
   }
 
-  void printDepChainAt(BasicBlock *BB) {
+  void printDepChainAt(BasicBlock *BB) const {
     errs() << "printing DCInter\n";
     for (auto &V : DCM.at(BB).first) {
+      V->print(errs());
+      errs() << "\n";
+    }
+    errs() << "printing DCUnion\n";
+    for (auto &V : DCM.at(BB).second) {
       V->print(errs());
       errs() << "\n";
     }
