@@ -669,18 +669,30 @@ public:
   // Excluded cases. Instructions of the below types are not handled as they
   // don't affect DepChains.
 
-  /// Excluded.
+  // Terminator Instructions.
+  void visitBranchInst(BranchInst &BranchI) {}
+  void visitSwitchInst(SwitchInst &SwitchI) {}
+  void visitIndirectBranchInst(IndirectBrInst &IndirectBrI) {}
+  void visitCallBrInst(CallBrInst &CallBrI) {}
+  void visitResumeInst(ResumeInst &ResumeI) {}
+  void visitCatchSwitchInst(CatchSwitchInst &CatchSwitchI) {}
+  void visitCatchReturnInst(CatchReturnInst &CatchReturnI) {}
+  void visitCleanupReturnInst(CleanupReturnInst &CleanupReturnI) {}
+  void visitUnreachableInst(UnreachableInst &UnreachableI) {}
+
+  // Memory Access and Addressing Operators.
   void visitAllocaInst(AllocaInst &AllocaI) {}
-  /// Excluded.
-  void visitFenceInst(FenceInst &FenceI) {}
-  /// Excluded.
   void visitAtomicCmpXchgInst(AtomicCmpXchgInst &AtomicCmpXchgI) {}
-  /// Excluded.
   void visitAtomicRMWInst(AtomicRMWInst &AtomicRMWI) {}
-  /// Excluded.
+  void visitFenceInst(FenceInst &FenceI) {}
+
+  // Other Operations.
+  void visitFreezeInst(FreezeInst &FreezeI) {}
+  void visitVAArgInst(VAArgInst &VAArgI) {}
+  void visitLandingPadInst(LandingPadInst &LandingPadI) {}
+  void visitCatchPadInst(CatchPadInst &CatchPadI) {}
   void visitFuncletPadInst(FuncletPadInst &FuncletPadI) {}
-  /// Excluded.
-  void visitTerminator(Instruction &TermI) {}
+  void visitCleanupPadInst(CleanupPadInst &CleanupPadI) {}
 
   // For shared functionality between the visitor functions, BFSCtx
   // provides two internal helper functions.
