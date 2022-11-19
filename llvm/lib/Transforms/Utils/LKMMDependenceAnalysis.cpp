@@ -52,6 +52,7 @@
 // FIXME: Brakcets with multiple levels of conditionals
 // FIXME: DCLCmp vs DCLAdd
 // FIXME: Remove evidence of partial dependencies
+// FIXME: n pte backward transposition will immediately make it ptr
 
 namespace llvm {
 static cl::opt<bool> InjectBugs(
@@ -97,7 +98,8 @@ template <typename T> using DepHalfMap = unordered_map<string, T>;
 /// PTR -> we're interested in the pointer itself.
 /// PTE -> we're interested in the pointed-to value.
 /// BOTH -> matches PTR __AND__ PTE.
-enum class DCLevel { PTR, PTE, BOTH };
+/// PLCHLDR -> used as dummy value.
+enum class DCLevel { PTR, PTE, BOTH, PLCHLDR };
 
 /// Represents a dependency chain link. A dep chain link consists of an IR
 /// value and the corresponding dep chain level.
@@ -296,8 +298,9 @@ class PotAddrDepBeg : public DepHalf {
 public:
   PotAddrDepBeg(Instruction *I, string ID, string PathToViaFiles, DepChain DC,
                 BasicBlock *BB)
-      : DepHalf(I, ID, PathToViaFiles, DK_AddrBeg), DCM() {
-    DCM.insert(pair{BB, move(DC)});
+      : DepHalf(I, ID, PathToViaFiles, DK_AddrBeg), FToDCM() {
+    FToDCM.insert({BB->getParent(), DepChainMap()});
+    FToDCM[BB->getParent()].insert({BB, DC});
   }
 
   /// Checks whether a DepChainPair is currently at a given BB.
@@ -305,19 +308,31 @@ public:
   /// \param BB the BB to be checked.
   ///
   /// \returns true if the PotAddrDepBeg has dep chains at \p BB.
-  bool isAt(BasicBlock *BB) const { return DCM.find(BB) != DCM.end(); }
+  bool isAt(BasicBlock *BB) {
+    if (FToDCM.find(BB->getParent()) == FToDCM.end())
+      return false;
+
+    auto &DCM = FToDCM[BB->getParent()];
+    return DCM.find(BB) != DCM.end();
+  }
 
   /// Returns the union of all dep chains at a given BB.
   ///
   /// \param BB the BB in question.
   ///
   /// \returns a pointer tot the dep chain union at \p BB.
-  DepChain *getDCsAt(BasicBlock *BB) { return isAt(BB) ? &DCM[BB] : nullptr; }
+  DepChain *getDCsAt(BasicBlock *BB) {
+    return isAt(BB) ? &FToDCM[BB->getParent()][BB] : nullptr;
+  }
 
   /// Removes a dep chain link in all dep chains at a given BB.
   ///
   /// \param BB the BB in question.
-  void removeLinkFromDCs(BasicBlock *BB, DCLink DCL) { DCM[BB].remove(DCL); }
+  void removeLinkFromDCs(BasicBlock *BB, DCLink DCL) {
+    if (!isAt(BB))
+      return;
+    FToDCM[BB->getParent()][BB].remove(DCL);
+  }
 
   /// Checks whether this PotAddrDepBeg begins at a given instruction.
   ///
@@ -335,6 +350,11 @@ public:
   ///
   /// \returns true if all DepChains are at \p BB.
   bool areAllDepChainsAt(BasicBlock *BB) {
+    if (!isAt(BB))
+      return false;
+
+    auto &DCM = FToDCM[BB->getParent()];
+
     return DCM.find(BB) != DCM.end() && DCM.size() == 1;
   };
 
@@ -384,42 +404,24 @@ public:
   /// \param I2 the instruction where the address dependency ends.
   void addAddrDep(string ID2, string PathToViaFiles2, Instruction *I2) const;
 
-  /// Resets the DepChainMap to a new state and potentially alteres the
-  /// possibility of this PotAddrDepBeg being the beginning of a full
-  /// dependency. This functionality is required for interprocedural analysis,
-  /// where a DepChain carries over, but should not be cluttered with values
-  /// from previous function(s). In the case where not all DepChains of this
-  /// PotAddrDepBeg carry over, this cannot mark the beginning of a full
-  /// dependency in the called function anymore.
+  /// Deletes the DepChainMap for the given function if it exists.
   ///
-  /// \param BB The BB to reset the DepChainMap to.
-  /// \param DC A DepChain to be usedj as initial value for the new DepChainPair
-  /// at \p BB. In the interprocedural analysis case, \p DC will contain all
-  /// function arguments which are part of a DepChain in the calling function.
-  void resetDCMTo(BasicBlock *BB, DepChain *DC) {
-    DCM.clear();
-    DCM.insert(pair{BB, *DC});
-  }
-
-  /// Resets the DepChainMap
-  void clearDCMap() { DCM.clear(); }
-
-  /// Returns true if the DepChainMap is completely empty. This is useful for
-  /// determining whether a dependency has started in the current function or
-  /// was carried over from a previous function where its dependency chain
-  /// didn't run into any of the function call's arguments, in which case its
-  /// DepChainMap will be completely empty.
-  ///
-  /// \Returns true if the DepChainMap is completely empty.
-  bool isDepChainMapEmpty() const { return DCM.empty(); }
-
-  DepChainMap &getDCM() { return DCM; }
+  /// \param F the function whose DepChainMap should be deleted.
+  void deleteDCM(Function *F) { FToDCM.erase(F); }
 
   static bool classof(const DepHalf *VDH) {
     return VDH->getKind() == DK_AddrBeg;
   }
 
+  /// Prints the dep chain union. Used for debugging.
+  ///
+  /// \param BB the BB whose dep chain union should be printed.
   void printDepChainAt(BasicBlock *BB) {
+    if (!isAt(BB))
+      return;
+
+    auto &DCM = FToDCM[BB->getParent()];
+
     errs() << "printing DCUnion\n";
     for (auto &DCL : DCM[BB]) {
       DCL.Val->print(errs());
@@ -428,7 +430,7 @@ public:
   }
 
 private:
-  DepChainMap DCM;
+  MapVector<Function *, DepChainMap> FToDCM;
 
   /// Helper function for progressDCPaths(). Used for computing an intersection
   /// of dep chains.
@@ -1245,6 +1247,8 @@ void PotAddrDepBeg::progressDCPaths(BasicBlock *BB, BasicBlock *SBB,
   if (!isAt(BB))
     return;
 
+  auto &DCM = FToDCM[BB->getParent()];
+
   if (!isAt(SBB))
     DCM.insert(pair{SBB, DepChain{}});
 
@@ -1287,6 +1291,8 @@ void PotAddrDepBeg::deleteDCsAt(BasicBlock *BB,
   if (!isAt(BB))
     return;
 
+  auto &DCM = FToDCM[BB->getParent()];
+
   if (!BEDs.empty() || isa<ReturnInst>(BB->getTerminator()))
     // Keep the entry in DCM to account for 'dead' DepChain, but clear
     // them to save space.
@@ -1297,10 +1303,7 @@ void PotAddrDepBeg::deleteDCsAt(BasicBlock *BB,
 }
 
 void PotAddrDepBeg::addToDCUnion(BasicBlock *BB, DCLink DCL) {
-  if (!isAt(BB))
-    return;
-
-  DCM[BB].insert(DCL);
+  FToDCM[BB->getParent()][BB].insert(DCL);
 }
 
 // FIXME: Template via level?
@@ -1320,6 +1323,7 @@ void PotAddrDepBeg::tryAddValueToDepChains(Instruction &I, DCLink DCLAdd,
   if (!isAt(I.getParent()) || isa<ConstantData>(DCLAdd.Val))
     return;
 
+  auto &DCM = FToDCM[I.getFunction()];
   auto &DC = DCM[I.getParent()];
 
   if (DC.contains(DCLCmp))
@@ -1330,6 +1334,11 @@ bool PotAddrDepBeg::belongsToDepChain(BasicBlock *BB, DCLink DCLCmp) {
   // FIXME: How can we make this redundant?
   assert(DCLCmp.Lvl != DCLevel::BOTH &&
          "Called belongsToDepChain() with DCLevel::BOTH.");
+
+  if (!isAt(BB))
+    return false;
+
+  auto &DCM = FToDCM[BB->getParent()];
 
   if (DCM.find(BB) == DCM.end())
     return false;
@@ -1671,7 +1680,8 @@ void BFSCtx::handleCall(CallBase &CallB) {
     // Inserts if ADB doesn't already exist
     ADBs.insert(pair{RADB->getID(), RADB});
 
-    RADB->addToDCUnion(BB, DCLAdd);
+    if (Lvl != DCLevel::PLCHLDR)
+      RADB->addToDCUnion(BB, DCLAdd);
 
     RADB->addStepToPathFrom(&CallB, true);
   }
@@ -1855,21 +1865,16 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
   for (auto &ADBP : ADBs) {
     auto &ADB = ADBP.second;
 
+    if (InheritedADBs.find(ADBP.first) == InheritedADBs.end())
+      ReturnedADBs.emplace_back(ADB, DCLevel::PLCHLDR);
+
     if (ADB->belongsToDepChain(BB, RetLinkPTR))
       ReturnedADBs.emplace_back(ADB, DCLevel::PTR);
 
     if (ADB->belongsToDepChain(BB, RetLinkPTE))
       ReturnedADBs.emplace_back(ADB, DCLevel::PTE);
 
-    // Remove all dep chains in the current function. These aren't
-    // relevant anymore after returning.
-    if (InheritedADBs.find(ADBP.first) != InheritedADBs.end()) {
-      auto &DCM = ADB->getDCM();
-      for (auto It = DCM.rbegin(); It->first->getParent() == BB->getParent();) {
-        auto Del = It++;
-        DCM.erase(Del->first);
-      }
-    }
+    ADB->deleteDCM(BB->getParent());
   }
 }
 
@@ -1947,8 +1952,14 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
 bool VerCtx::handleAddrDepID(string const &ID, Instruction *I,
                              string &ParsedDepHalfID,
                              string &ParsedPathToViaFiles) {
-  auto DCLCmp = isa<StoreInst>(I) ? DCLink(I->getOperand(1), DCLevel::PTR)
-                                  : DCLink(I->getOperand(0), DCLevel::PTE);
+  auto DCLCmp = DCLink(nullptr, DCLevel::PTR);
+
+  if (auto *SI = dyn_cast<StoreInst>(I))
+    DCLCmp.Val = SI->getPointerOperand();
+  else if (auto *LI = dyn_cast<LoadInst>(I))
+    DCLCmp.Val = LI->getPointerOperand();
+  else
+    llvm_unreachable("Non-store or non-load instruction in handleAddrDepID().");
 
   if (ADBs.find(ID) != ADBs.end()) {
     auto &ADB = ADBs.at(ID);
@@ -1964,7 +1975,11 @@ bool VerCtx::handleAddrDepID(string const &ID, Instruction *I,
       auto VADE = VerAddrDepEnd(I, ID, getFullPath(I), getFullPath(I, true),
                                 ParsedDepHalfID, ParsedPathToViaFiles);
 
-      VADB.setDCP(*ADB->getDCsAt(BB));
+      if (auto *DCU = ADB->getDCsAt(BB))
+        VADB.setDCP(*DCU);
+      else
+        VADB.setDCP({});
+
       VADE.setBrokenBy(VerDepHalf::BrokenByType::BrokenDC);
 
       BrokenADEs->emplace(ID, move(VADE));
