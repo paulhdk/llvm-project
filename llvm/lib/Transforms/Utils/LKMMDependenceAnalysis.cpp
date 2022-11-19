@@ -133,21 +133,9 @@ template <> struct DenseMapInfo<DCLink> {
 /// links.
 using DepChain = SetVector<DCLink>;
 
-/// A DepChainPair is the pair of the intersection of all dep chains and the
-/// union of all dep chains. It exists for every BB the dependency chains of a
-/// given potential address dependency beginning visit.
-struct DepChainPair {
-  DepChainPair() = default;
-  DepChainPair(DepChain DCUnion, DepChain DCInter)
-      : DCInter(move(DCInter)), DCUnion(move(DCUnion)) {}
-
-  DepChain DCInter;
-  DepChain DCUnion;
-};
-
-// DepChainMap maps BBs to dep chain pairs.  Such a map exists for every
-// potential addr dep beginning.
-using DepChainMap = MapVector<BasicBlock *, DepChainPair>;
+// DepChainMap maps BBs to DCUnion dep chains, i.e. the union of all dep chains
+// at that BB. Such a map exists for every potential addr dep beginning.
+using DepChainMap = MapVector<BasicBlock *, DepChain>;
 
 using VerIDSet = unordered_set<string>;
 
@@ -307,9 +295,9 @@ private:
 class PotAddrDepBeg : public DepHalf {
 public:
   PotAddrDepBeg(Instruction *I, string ID, string PathToViaFiles, DepChain DC,
-                bool FDep, BasicBlock *BB)
-      : DepHalf(I, ID, PathToViaFiles, DK_AddrBeg), DCM(), FDep(FDep) {
-    DCM.insert(pair{BB, DepChainPair{move(DC), move(DC)}});
+                BasicBlock *BB)
+      : DepHalf(I, ID, PathToViaFiles, DK_AddrBeg), DCM() {
+    DCM.insert(pair{BB, move(DC)});
   }
 
   /// Checks whether a DepChainPair is currently at a given BB.
@@ -319,22 +307,17 @@ public:
   /// \returns true if the PotAddrDepBeg has dep chains at \p BB.
   bool isAt(BasicBlock *BB) const { return DCM.find(BB) != DCM.end(); }
 
-  /// Returns the DepChainPair at a given BB.
+  /// Returns the union of all dep chains at a given BB.
   ///
   /// \param BB the BB in question.
   ///
-  /// \returns a pointer tot the DepChainPair at \p BB.
-  DepChainPair *getDCsAt(BasicBlock *BB) {
-    return isAt(BB) ? &DCM[BB] : nullptr;
-  }
+  /// \returns a pointer tot the dep chain union at \p BB.
+  DepChain *getDCsAt(BasicBlock *BB) { return isAt(BB) ? &DCM[BB] : nullptr; }
 
   /// Removes a dep chain link in all dep chains at a given BB.
   ///
   /// \param BB the BB in question.
-  void removeLinkFromDCs(BasicBlock *BB, DCLink DCL) {
-    DCM[BB].DCInter.remove(DCL);
-    DCM[BB].DCUnion.remove(DCL);
-  }
+  void removeLinkFromDCs(BasicBlock *BB, DCLink DCL) { DCM[BB].remove(DCL); }
 
   /// Checks whether this PotAddrDepBeg begins at a given instruction.
   ///
@@ -371,30 +354,11 @@ public:
   /// \param BEDsForBB the back edge destination for \p BB.
   void deleteDCsAt(BasicBlock *BB, unordered_set<BasicBlock *> &BEDs);
 
-  /// Tries to add a link to the intersection of all DepChains at \p BB.
-  ///
-  /// \param BB the BB to whose dep chain intersection \p DCL should be added.
-  /// \param DCL the dep chain link to be added.
-  void addToDCInter(BasicBlock *BB, DCLink DCL);
-
   /// Tries to add a dep chain link to the union of all dep chains at \p BB.
   ///
   /// \param BB the BB to whose dep chain union \p DCL should be added.
   /// \param DCL the dep chain link to be added.
   void addToDCUnion(BasicBlock *BB, DCLink DCL);
-
-  /// Checks if a counter-argument for this beginning being a full dependency
-  /// has been found yet.
-  ///
-  /// \returns false if a counter-argument for this beginning being a full
-  ///  dependency has been found.
-  bool canBeFullDependency() const { return FDep; }
-
-  /// This function is called when the BFS is able to prove that any
-  /// instruction it encounters after this call is not able to complete a full
-  /// dependency to this beginning. This might be the case when the BFS has just
-  /// seen a DepChain running through a back edge.
-  void cannotBeFullDependencyAnymore() { FDep = false; }
 
   /// Tries to continue the DepChain with a new value.
   ///
@@ -402,18 +366,6 @@ public:
   /// \param DCLAdd the link to add if \p DCLCmp is part of a dep chain.
   /// \param DCLCmp the link which might or might not be part of a dep chain.
   void tryAddValueToDepChains(Instruction &I, DCLink DCLAdd, DCLink DCLCmp);
-
-  /// Checks if a value is part of all dep chains starting at this
-  /// PotAddrDepBeg. Can be used for checking whether an address dependency
-  /// ending marks a full dependency to this PotAddrDepBeg.
-  ///
-  /// \param BB the BB the BFS is currently visiting.
-  /// \param DCLCmp the link which might or might not be part of all dep
-  ///  chains.
-  ///
-  /// \returns true if \p DCLCmp is part of all of the beginning's dep chains at
-  ///  the specified level.
-  bool belongsToAllDepChains(BasicBlock *BB, DCLink DCLCmp);
 
   /// Checks if a value is part of any dep chain of an addr dep beginning.
   ///
@@ -426,26 +378,11 @@ public:
   ///  level.
   bool belongsToDepChain(BasicBlock *BB, DCLink DCLCmp);
 
-  /// Checks if a link is part of some, but not all, dep chains, starting at
-  /// this potential beginning. Can be used for checking whether an address
-  /// dependency ending marks a partial dependency to this PotAddrDepBeg.
-  ///
-  /// \param BB the BB the BFS is currently at.
-  /// \param DCLCmp the dep chain link which might or might not be part of all
-  ///  dep chains.
-  ///
-  /// \returns true if \p DCLCmp belongs to at least one, but not all, of this
-  ///  PotAddrDepBeg's DepChains.
-  bool belongsToSomeNotAllDepChains(BasicBlock *BB, DCLink DCLCmp);
-
   /// Annotates an address dependency from a given ending to this beginning.
   ///
   /// \param ID2 the ID of the ending.
   /// \param I2 the instruction where the address dependency ends.
-  /// \param FDep set to true if this is a full address
-  ///  dependency.
-  void addAddrDep(string ID2, string PathToViaFiles2, Instruction *I2,
-                  bool FDep) const;
+  void addAddrDep(string ID2, string PathToViaFiles2, Instruction *I2) const;
 
   /// Resets the DepChainMap to a new state and potentially alteres the
   /// possibility of this PotAddrDepBeg being the beginning of a full
@@ -456,14 +393,12 @@ public:
   /// dependency in the called function anymore.
   ///
   /// \param BB The BB to reset the DepChainMap to.
-  /// \param FDep The new \p FDep state.
-  /// \param DC A DepChain to be used as initial value for the new DepChainPair
+  /// \param DC A DepChain to be usedj as initial value for the new DepChainPair
   /// at \p BB. In the interprocedural analysis case, \p DC will contain all
   /// function arguments which are part of a DepChain in the calling function.
-  void resetDCMTo(BasicBlock *BB, bool FDep, DepChain *DC) {
-    this->FDep = FDep;
+  void resetDCMTo(BasicBlock *BB, DepChain *DC) {
     DCM.clear();
-    DCM.insert(pair{BB, DepChainPair(*DC, *DC)});
+    DCM.insert(pair{BB, *DC});
   }
 
   /// Resets the DepChainMap
@@ -485,25 +420,15 @@ public:
   }
 
   void printDepChainAt(BasicBlock *BB) {
-    errs() << "printing DCInter\n";
-    for (auto &DCL : DCM[BB].DCInter) {
-      DCL.Val->print(errs());
-      errs() << "\n";
-    }
     errs() << "printing DCUnion\n";
-    for (auto &DCL : DCM[BB].DCUnion) {
+    for (auto &DCL : DCM[BB]) {
       DCL.Val->print(errs());
-      errs() << "\n";
+      errs() << (DCL.Lvl == DCLevel::PTE ? " PTE " : " PTR ") << "\n";
     }
   }
 
 private:
   DepChainMap DCM;
-
-  // Denotes whether a matching ending can be annotated as a full dependency. Is
-  // set to false if the algorithm encounters something on the way that makes a
-  // full dependency impossible, e.g. a backedge.
-  bool FDep;
 
   /// Helper function for progressDCPaths(). Used for computing an intersection
   /// of dep chains.
@@ -576,8 +501,8 @@ public:
       : VerDepHalf(I, ParsedID, DepHalfID, PathToViaFiles, ParsedPathTo,
                    ParsedPathToViaFiles, DK_VerAddrBeg) {}
 
-  void setDCP(DepChainPair DCP) { this->DCP = DCP; }
-  DepChainPair &getDCP() { return DCP; }
+  void setDCP(DepChain DC) { this->DC = DC; }
+  DepChain &getDC() { return DC; }
 
   static bool classof(const DepHalf *VDH) {
     return VDH->getKind() == DK_VerAddrBeg;
@@ -586,29 +511,20 @@ public:
 private:
   // Gets populated at the end of the BFS and is used for printing the dep
   // chain to users.
-  DepChainPair DCP;
+  DepChain DC;
 };
 
 class VerAddrDepEnd : public VerDepHalf {
 public:
   VerAddrDepEnd(Instruction *I, string ParsedID, string DepHalfID,
                 string PathToViaFiles, string ParsedDepHalfID,
-                string ParsedPathToViaFiles, bool ParsedFDep)
+                string ParsedPathToViaFiles)
       : VerDepHalf(I, ParsedID, DepHalfID, PathToViaFiles, ParsedDepHalfID,
-                   ParsedPathToViaFiles, DK_VerAddrEnd),
-        ParsedFDep(ParsedFDep) {}
-
-  const bool &getParsedFullDep() const { return ParsedFDep; }
+                   ParsedPathToViaFiles, DK_VerAddrEnd) {}
 
   static bool classof(const DepHalf *VDH) {
     return VDH->getKind() == DK_VerAddrEnd;
   }
-
-private:
-  // Denotes whether the address dependency was annotated as a full dependency
-  // or a partial dependency. The value is obtained from the metadata
-  // annotation.
-  const bool ParsedFDep;
 };
 
 using InterprocBFSRes = list<pair<shared_ptr<PotAddrDepBeg>, DCLevel>>;
@@ -934,20 +850,9 @@ public:
     for (const auto &ADBP : ADBs) {
       auto &ADB = ADBP.second;
 
-      // FIXME: Not needed if canBeFullDependency() returns false
-      auto FullDep = ADB->canBeFullDependency();
-
       // Check whether all cmp links are part of the dep chains in ADB.
       for (auto DCLCmp : DCLCmps)
         ADB->tryAddValueToDepChains(I, DCLAdd, DCLCmp);
-
-      // Account for instrcutions which can be rewritten as an if-then-else,
-      // therefore affecting whether a dependency chain runs on all control-flow
-      // paths.
-      if (isa<PHINode>(I) || isa<AtomicCmpXchgInst>(I) || isa<SelectInst>(I))
-        // Preserve full dep status if all operands are part of dep chain.
-        if (!FullDep)
-          ADB->cannotBeFullDependencyAnymore();
     }
   }
 
@@ -1071,11 +976,10 @@ protected:
   /// \param ADB the PotAddrDepBeg in question.
   /// \param CallI the call instruction whose arguments should be checked
   ///  against \p ADB's dep chains.
-  /// \param DependentArgs the set which will contain all dependent function
+  /// \param DepArgsDCUnion the set which will contain all dependent function
   ///  arguments on return.
   void findDependentArgs(shared_ptr<PotAddrDepBeg> ADB, CallBase *CallB,
-                         DepChain *DependentArgsDCInter,
-                         DepChain *DependentArgsDCUnion);
+                         DepChain *DepArgsDCUnion);
 
   /// Returns the current limit for interprocedural annotation / verification
   ///
@@ -1299,12 +1203,10 @@ private:
   ///  instruction where the address dependency ends.
   /// \param ParsedPathTo the path the annotation pass took to discover
   ///  \p Inst.
-  /// \param ParsedFullDep set to true if the address dependency was annotated
-  ///  as a full dependency.
   ///
   /// \returns true if the address dependency could be verified.
   bool handleAddrDepID(string const &ID, Instruction *I, string &ParsedPathTo,
-                       string &ParsedPathToViaFiles, bool ParsedFullDep);
+                       string &ParsedPathToViaFiles);
 
   /// Responsible for updating an ID if the verification pass has encountered
   /// it before. Will add the updated ID to \p RemappedIDs.
@@ -1344,9 +1246,9 @@ void PotAddrDepBeg::progressDCPaths(BasicBlock *BB, BasicBlock *SBB,
     return;
 
   if (!isAt(SBB))
-    DCM.insert(pair{SBB, DepChainPair{}});
+    DCM.insert(pair{SBB, DepChain{}});
 
-  auto &SDCP = DCM[SBB];
+  auto &SDC = DCM[SBB];
 
   // BB might not be the only predecessor of SBB. Build a list of
   // all preceeding dep chains.
@@ -1362,45 +1264,22 @@ void PotAddrDepBeg::progressDCPaths(BasicBlock *BB, BasicBlock *SBB,
     if (!isAt(Pred))
       continue;
 
-    // Previous, i.e. Pred's, DepChainPair.
-    auto &PDCP = DCM[Pred];
+    // Previous, i.e. Pred's, DepChain.
+    auto &PDC = DCM[Pred];
 
     // Insert preceeding DCunion into succeeding DCUnion.
-    SDCP.DCUnion.insert(PDCP.DCUnion.begin(), PDCP.DCUnion.end());
-
-    // Save preceeding DepChain for intersection.
-    PDCs.emplace_back(Pred, &PDCP.DCInter);
+    // => union of all preceeding unions.
+    SDC.insert(PDC.begin(), PDC.end());
   }
-
-  // FIXME When this if doesn't fire, depChainsShareValue() will make one
-  //  unneccesary loop iteration.
 
   // If PDCs is empty, we are at the function entry:
   if (PDCs.empty()) {
     // 1. Intiialise PDCs with current DCUnion.
-    SDCP.DCUnion.insert(DCM[BB].DCUnion.begin(), DCM[BB].DCUnion.end());
+    SDC.insert(DCM[BB].begin(), DCM[BB].end());
 
     // 2. Initialise SDCP's DCUnion with the current DCUnion.
-    PDCs.emplace_back(BB, &DCM[BB].DCInter);
+    PDCs.emplace_back(BB, &DCM[BB]);
   }
-
-  // Update DCInter. Only add a value if it's present in every
-  // preceeding DepChain.
-  DepChain FixedDC = *PDCs.begin()->second;
-
-  // If SDCP's DCInter isn't empty. Intersect succeeding DCInter with
-  // current DCInter.
-  if (!SDCP.DCInter.empty()) {
-    FixedDC = SDCP.DCInter;
-    SDCP.DCInter.clear();
-  }
-
-  // Compute intersection of all dep chains leading to SBB.
-  for (const auto &DCL : FixedDC)
-    // Add a value if it is present in all preceeding DepChains.
-    // FIXME:
-    if (depChainsShareLink(PDCs, DCL))
-      SDCP.DCInter.insert(DCL);
 }
 
 void PotAddrDepBeg::deleteDCsAt(BasicBlock *BB,
@@ -1408,75 +1287,45 @@ void PotAddrDepBeg::deleteDCsAt(BasicBlock *BB,
   if (!isAt(BB))
     return;
 
-  if (!BEDs.empty() || isa<ReturnInst>(BB->getTerminator())) {
+  if (!BEDs.empty() || isa<ReturnInst>(BB->getTerminator()))
     // Keep the entry in DCM to account for 'dead' DepChain, but clear
     // them to save space.
-    DCM[BB].DCInter.clear();
-    DCM[BB].DCUnion.clear();
-  } else
+    DCM[BB].clear();
+  else
     // If there's no dead DepChain, erase the DCM entry for the current BB.
     DCM.erase(BB);
-}
-
-void PotAddrDepBeg::addToDCInter(BasicBlock *BB, DCLink DCL) {
-  if (!isAt(BB))
-    return;
-
-  DCM[BB].DCInter.insert(DCL);
 }
 
 void PotAddrDepBeg::addToDCUnion(BasicBlock *BB, DCLink DCL) {
   if (!isAt(BB))
     return;
 
-  DCM[BB].DCUnion.insert(DCL);
+  DCM[BB].insert(DCL);
 }
 
 // FIXME: Template via level?
 void PotAddrDepBeg::tryAddValueToDepChains(Instruction &I, DCLink DCLAdd,
                                            DCLink DCLCmp) {
+  // FIXME: How can this check be made redundant?
+  assert(DCLAdd.Lvl != DCLevel::BOTH &&
+         "Called tryAddLinkToDepChains() with invalid level for DCAdd.");
+
   if (DCLCmp.Lvl == DCLevel::BOTH) {
-    // FIXME: Check for DCAdd here?
-    tryAddValueToDepChains(I, DCLink(DCLCmp.Val, DCLevel::PTR),
-                           DCLink(DCLAdd.Val, DCLevel::PTR));
-    tryAddValueToDepChains(I, DCLink(DCLCmp.Val, DCLevel::PTE),
-                           DCLink(DCLAdd.Val, DCLevel::PTE));
+    // FIXME: Check DCAdd's level here?
+    tryAddValueToDepChains(I, DCLAdd, DCLink{DCLCmp.Val, DCLevel::PTR});
+    tryAddValueToDepChains(I, DCLAdd, DCLink{DCLCmp.Val, DCLevel::PTE});
+    return;
   }
 
   if (!isAt(I.getParent()) || isa<ConstantData>(DCLAdd.Val))
     return;
 
-  // FIXME: How can this check be made redundant?
-  assert(DCLAdd.Lvl != DCLevel::BOTH &&
-         "Called tryAddLinkToDepChains() with invalid level for DCAdd.");
+  auto &DC = DCM[I.getParent()];
 
-  auto &DCP = DCM[I.getParent()];
-
-  auto &DCInter = DCP.DCInter;
-  auto &DCUnion = DCP.DCUnion;
-
-  if (DCInter.contains(DCLCmp))
-    DCInter.insert(DCLAdd);
-
-  if (DCUnion.contains(DCLCmp))
-    DCUnion.insert(DCLAdd);
+  if (DC.contains(DCLCmp))
+    DC.insert(DCLAdd);
 }
 
-bool PotAddrDepBeg::belongsToAllDepChains(BasicBlock *BB, DCLink DCLCmp) {
-  // FIXME: How can we make this redundant?
-  assert(DCLCmp.Lvl != DCLevel::BOTH &&
-         "Called belongsToAllDepChains() with DCLevel::BOTH.");
-
-  if (DCM.find(BB) == DCM.end())
-    return false;
-
-  auto &DCInter = DCM[BB].DCInter;
-
-  return DCInter.contains(DCLCmp) && DCM.size() == 1;
-}
-
-// FIXME: could be templated for combining belongsToDepChain and
-// belongsToAllDepChains()?
 bool PotAddrDepBeg::belongsToDepChain(BasicBlock *BB, DCLink DCLCmp) {
   // FIXME: How can we make this redundant?
   assert(DCLCmp.Lvl != DCLevel::BOTH &&
@@ -1485,25 +1334,13 @@ bool PotAddrDepBeg::belongsToDepChain(BasicBlock *BB, DCLink DCLCmp) {
   if (DCM.find(BB) == DCM.end())
     return false;
 
-  auto &DCUnion = DCM[BB].DCUnion;
+  auto &DC = DCM[BB];
 
-  return DCUnion.contains(DCLCmp);
-}
-
-bool PotAddrDepBeg::belongsToSomeNotAllDepChains(BasicBlock *BB,
-                                                 DCLink DCLCmp) {
-  // FIXME: How can we make this redundant?
-  assert(DCLCmp.Lvl != DCLevel::BOTH &&
-         "Called belongsToSomeNotAllDepChains() with DCLevel::BOTH.");
-
-  if (DCM.find(BB) == DCM.end())
-    return false;
-
-  return !belongsToAllDepChains(BB, DCLCmp) && belongsToDepChain(BB, DCLCmp);
+  return DC.contains(DCLCmp);
 }
 
 void PotAddrDepBeg::addAddrDep(string ID2, string PathToViaFiles2,
-                               Instruction *I2, bool FDep) const {
+                               Instruction *I2) const {
   auto DepID = getID() + PathFrom + ID2;
 
   auto BeginAnnotation = ADBStr.str() + ",\n" + DepID + ",\n" + getID() + ",\n";
@@ -1514,7 +1351,7 @@ void PotAddrDepBeg::addAddrDep(string ID2, string PathToViaFiles2,
     return;
 
   BeginAnnotation += getPathToViaFiles() + ";";
-  EndAnnotation += PathToViaFiles2 + ",\n" + to_string(FDep) + ";";
+  EndAnnotation += PathToViaFiles2 + ",\n" + ";";
 
   I->addAnnotationMetadata(BeginAnnotation);
   I2->addAnnotationMetadata(EndAnnotation);
@@ -1588,23 +1425,19 @@ void BFSCtx::deleteAddrDepDCsAt(BasicBlock *BB,
 }
 
 void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
-  DepChain DependentArgsDCInter;
-  DepChain DependentArgsDCUnion;
+  DepChain DepArgs;
 
-  for (auto It = ADBs.begin(); It != ADBs.end();) {
+  for (auto It = ADBs.begin(); It != ADBs.end(); ++It) {
     auto &ParsedID = It->first;
     auto &ADB = It->second;
 
-    findDependentArgs(ADB, CallB, &DependentArgsDCInter, &DependentArgsDCUnion);
+    findDependentArgs(ADB, CallB, &DepArgs);
 
-    if (!DependentArgsDCUnion.empty()) {
+    if (!DepArgs.empty()) {
       if (FirstBB) {
         ADB->addStepToPathFrom(CallB);
 
-        // Add all dependent args to their respective dep chains
-        for (auto DA : DependentArgsDCInter)
-          ADB->addToDCInter(FirstBB, move(DA));
-        for (auto DA : DependentArgsDCUnion)
+        for (auto DA : DepArgs)
           ADB->addToDCUnion(FirstBB, move(DA));
 
         InheritedADBs.insert(ParsedID);
@@ -1613,15 +1446,10 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
         // verified in VerCtx
         VC->markIDAsVerified(ParsedID);
       }
-      It++;
-    } else {
-      auto Del = It++;
-      ADBs.erase(Del);
     }
   }
 
-  DependentArgsDCInter.clear();
-  DependentArgsDCUnion.clear();
+  DepArgs.clear();
 }
 
 void BFSCtx::prepareInterproc(BasicBlock *FirstBB, CallBase *CallB) {
@@ -1656,8 +1484,7 @@ constexpr unsigned BFSCtx::currentLimit() const {
 }
 
 void BFSCtx::findDependentArgs(shared_ptr<PotAddrDepBeg> ADB, CallBase *CallB,
-                               DepChain *DependentArgsDCInter,
-                               DepChain *DependentArgsDCUnion) {
+                               DepChain *DepArgs) {
   auto *CalledF = CallB->getCalledFunction();
 
   for (unsigned Ind = 0; Ind < CallB->arg_size(); ++Ind) {
@@ -1667,27 +1494,26 @@ void BFSCtx::findDependentArgs(shared_ptr<PotAddrDepBeg> ADB, CallBase *CallB,
     if (ADB->belongsToDepChain(BB, DCLink(VCmp, DCLevel::PTR))) {
       if (CalledF) {
         if (!CalledF->isVarArg()) {
-          DependentArgsDCUnion->insert(
-              DCLink{CalledF->getArg(Ind), DCLevel::PTR});
+          DepArgs->insert(DCLink{CalledF->getArg(Ind), DCLevel::PTR});
           continue;
         }
       }
 
       // CalledF is null or CalledF is variadic
-      DependentArgsDCUnion->insert(DCLink{VCmp, DCLevel::PTR});
+      DepArgs->insert(DCLink{VCmp, DCLevel::PTR});
     }
 
-    if (auto L = ADB->belongsToAllDepChains(BB, DCLink(VCmp, DCLevel::PTE))) {
+    // FIXME: Basically duplicate
+    if (ADB->belongsToDepChain(BB, DCLink(VCmp, DCLevel::PTE))) {
       if (CalledF) {
         if (!CalledF->isVarArg()) {
-          DependentArgsDCInter->insert(
-              DCLink(CalledF->getArg(Ind), DCLevel::PTE));
+          DepArgs->insert(DCLink{CalledF->getArg(Ind), DCLevel::PTE});
           continue;
         }
       }
 
       // CalledF is null or CalledF is variadic
-      DependentArgsDCInter->insert(DCLink{VCmp, DCLevel::PTE});
+      DepArgs->insert(DCLink{VCmp, DCLevel::PTE});
     }
   }
 }
@@ -1797,7 +1623,6 @@ void BFSCtx::visitInstruction(Instruction &I) {
 }
 
 void BFSCtx::handleCall(CallBase &CallB) {
-  // TODO: what about FDep when running into functions?
   auto *CalledF = CallB.getCalledFunction();
 
   if (recLevel() > currentLimit())
@@ -1842,19 +1667,11 @@ void BFSCtx::handleCall(CallBase &CallB) {
     auto &RADB = RADBP.first;
     auto &Lvl = RADBP.second;
     DCLink DCLAdd = {VAdd, Lvl};
-    // TODO: move dep chains from last BB in CalledF to current BB again
 
     // Inserts if ADB doesn't already exist
-    ADBs.insert(pair(RADB->getID(), RADB));
+    ADBs.insert(pair{RADB->getID(), RADB});
 
     RADB->addToDCUnion(BB, DCLAdd);
-
-    // If not all dep chains from the beginning got returned, FDep might
-    // have changed.
-    if (RADB->canBeFullDependency())
-      RADB->addToDCInter(BB, DCLAdd);
-    else
-      RADB->cannotBeFullDependencyAnymore();
 
     RADB->addStepToPathFrom(&CallB, true);
   }
@@ -1871,23 +1688,18 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
   auto DCLEnd = DCLink(LoadI.getPointerOperand(), DCLevel::PTR);
   auto DCLAdd = DCLink(&LoadI, DCLevel::PTR);
 
+  // TODO outsource into seperate functions
   for (auto &ADBP : ADBs) {
     auto &ADB = ADBP.second;
 
     depChainThroughInst(LoadI, DCLAdd, SmallVector<DCLink>{DCLCmp});
 
-    if (LoadI.isVolatile()) {
-      if (isa<AnnotCtx>(this)) {
-        if (ADB->belongsToAllDepChains(BB, DCLCmp) &&
-            ADB->canBeFullDependency()) {
+    // FIXME: this gets checked every loop iteration.
+    if (LoadI.isVolatile())
+      if (isa<AnnotCtx>(this))
+        if (ADB->belongsToDepChain(BB, DCLEnd))
           ADB->addAddrDep(getInstLocString(&LoadI), getFullPath(&LoadI, true),
-                          &LoadI, true);
-        } else if (ADB->belongsToSomeNotAllDepChains(BB, DCLEnd)) {
-          ADB->addAddrDep(getInstLocString(&LoadI), getFullPath(&LoadI, true),
-                          &LoadI, false);
-        }
-      }
-    }
+                          &LoadI);
   }
 
   if (!LoadI.isVolatile())
@@ -1902,24 +1714,28 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
   if (ADBs.find(ID) == ADBs.end()) {
     DepChain DC;
 
+    Value *LoadVal = cast<Value>(&LoadI);
+
     // A dep chain always starts at the level POINTER
-    DC.insert(DCLink{&LoadI, DCLevel::PTR});
+    DC.insert(DCLink{LoadVal, DCLevel::PTR});
 
     ADBs.emplace(
         ID, std::make_shared<PotAddrDepBeg>(&LoadI, getInstLocString(&LoadI),
-                                            getFullPath(&LoadI, true), DC, true,
+                                            getFullPath(&LoadI, true), move(DC),
                                             LoadI.getParent()));
   }
 }
 
 bool BFSCtx::storeOverwritesDCValue(StoreInst &StoreI,
                                     shared_ptr<PotAddrDepBeg> ADB) {
-  auto StoreSrc = DCLink(StoreI.getValueOperand(), DCLevel::BOTH);
+  auto StoreSrcPTE = DCLink(StoreI.getValueOperand(), DCLevel::PTE);
+  auto StoreSrcPTR = DCLink(StoreI.getValueOperand(), DCLevel::PTR);
   auto StoreDst = DCLink(StoreI.getPointerOperand(), DCLevel::PTE);
 
   // Overwrites iff we store non-dc value to a pointee value in a dep chain
   if (ADB->belongsToDepChain(StoreI.getParent(), StoreDst) &&
-      !ADB->belongsToDepChain(StoreI.getParent(), StoreSrc))
+      (!ADB->belongsToDepChain(StoreI.getParent(), StoreSrcPTR) ||
+       !ADB->belongsToDepChain(StoreI.getParent(), StoreSrcPTE)))
     return true;
 
   return false;
@@ -1932,8 +1748,7 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
       VC->handleDepAnnotations(&StoreI, MDAnnotation);
 
   auto DCLCmp = DCLink(StoreI.getValueOperand(), DCLevel::BOTH);
-
-  // *foo = dep_chain_value; // foo is now part of dep chain at pointee level.
+  auto DCLEnd = DCLink(StoreI.getPointerOperand(), DCLevel::PTR);
   auto DCLAdd = DCLink(StoreI.getPointerOperand(), DCLevel::PTE);
 
   for (auto &ADBP : ADBs) {
@@ -1941,25 +1756,18 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
 
     // We check for the case here where we have somethign like
     // *dep_chain_ptr = non_dep_chain_value;
-    // In that case, we must remove 'dep_chain_ptr' from the dep chain.
+    // In thatLoadI case, we must remove 'dep_chain_ptr' from the dep chain.
     if (storeOverwritesDCValue(StoreI, ADB))
       ADB->removeLinkFromDCs(BB, DCLAdd);
     else
-      ADB->tryAddValueToDepChains(StoreI, DCLAdd, DCLCmp);
+      depChainThroughInst(StoreI, DCLAdd, SmallVector<DCLink>{DCLCmp});
 
     // FIXME: dubplicate code
-    if (StoreI.isVolatile()) {
-      if (isa<AnnotCtx>(this)) {
-        if (ADB->belongsToAllDepChains(BB, DCLCmp) &&
-            ADB->canBeFullDependency()) {
+    if (StoreI.isVolatile())
+      if (isa<AnnotCtx>(this))
+        if (ADB->belongsToDepChain(BB, DCLEnd))
           ADB->addAddrDep(getInstLocString(&StoreI), getFullPath(&StoreI, true),
-                          &StoreI, true);
-        } else if (ADB->belongsToSomeNotAllDepChains(BB, DCLCmp)) {
-          ADB->addAddrDep(getInstLocString(&StoreI), getFullPath(&StoreI, true),
-                          &StoreI, false);
-        }
-      }
-    }
+                          &StoreI);
   }
 }
 
@@ -2037,25 +1845,21 @@ void BFSCtx::visitSelectInst(SelectInst &SelectI) {
 }
 
 void BFSCtx::visitReturnInst(ReturnInst &RetI) {
-  auto RetLinkPTR = DCLink(RetI.getReturnValue(), DCLevel::PTR);
-  auto RetLinkPTE = DCLink(RetI.getReturnValue(), DCLevel::PTE);
+  auto *RetVal = RetI.getReturnValue();
+  auto RetLinkPTR = DCLink(RetVal, DCLevel::PTR);
+  auto RetLinkPTE = DCLink(RetVal, DCLevel::PTE);
 
-  if (!recLevel() || !RetLinkPTE.Val)
+  if (!recLevel() || !RetVal)
     return;
 
   for (auto &ADBP : ADBs) {
     auto &ADB = ADBP.second;
 
-    if (ADB->belongsToDepChain(BB, RetLinkPTR)) {
+    if (ADB->belongsToDepChain(BB, RetLinkPTR))
       ReturnedADBs.emplace_back(ADB, DCLevel::PTR);
-    }
 
-    if (ADB->belongsToDepChain(BB, RetLinkPTE)) {
+    if (ADB->belongsToDepChain(BB, RetLinkPTE))
       ReturnedADBs.emplace_back(ADB, DCLevel::PTE);
-    }
-
-    if (ADB->belongsToSomeNotAllDepChains(BB, RetLink))
-      ADB->cannotBeFullDependencyAnymore();
 
     // Remove all dep chains in the current function. These aren't
     // relevant anymore after returning.
@@ -2142,7 +1946,7 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
 
 bool VerCtx::handleAddrDepID(string const &ID, Instruction *I,
                              string &ParsedDepHalfID,
-                             string &ParsedPathToViaFiles, bool ParsedFullDep) {
+                             string &ParsedPathToViaFiles) {
   auto DCLCmp = isa<StoreInst>(I) ? DCLink(I->getOperand(1), DCLevel::PTR)
                                   : DCLink(I->getOperand(0), DCLevel::PTE);
 
@@ -2157,27 +1961,14 @@ bool VerCtx::handleAddrDepID(string const &ID, Instruction *I,
     // Check for fully broken dependency chain
     if (!ADB->belongsToDepChain(BB, DCLCmp)) {
       auto &VADB = BrokenADBs->at(ID);
-      auto VADE =
-          VerAddrDepEnd(I, ID, getFullPath(I), getFullPath(I, true),
-                        ParsedDepHalfID, ParsedPathToViaFiles, ParsedFullDep);
+      auto VADE = VerAddrDepEnd(I, ID, getFullPath(I), getFullPath(I, true),
+                                ParsedDepHalfID, ParsedPathToViaFiles);
 
       VADB.setDCP(*ADB->getDCsAt(BB));
       VADE.setBrokenBy(VerDepHalf::BrokenByType::BrokenDC);
 
       BrokenADEs->emplace(ID, move(VADE));
       return false;
-    }
-
-    // Check for full to partial conversion iff cl opt is specified
-    if (FullToPartialOpt) {
-      if (ParsedFullDep && ADB->belongsToSomeNotAllDepChains(BB, DCLCmp)) {
-        BrokenADEs->emplace(ID,
-                            VerAddrDepEnd(I, ID, getFullPath(I),
-                                          getFullPath(I, true), ParsedDepHalfID,
-                                          ParsedPathToViaFiles, ParsedFullDep));
-        BrokenADEs->at(ID).setBrokenBy(VerDepHalf::BrokenByType::FullToPart);
-        return false;
-      }
     }
   } else
     return false;
@@ -2235,7 +2026,7 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       DC.insert(DCLink(I, DCLevel::PTR));
       ADBs.emplace(ParsedID, std::make_shared<PotAddrDepBeg>(
                                  I, getFullPath(I), getFullPath(I, true),
-                                 move(DC), true, I->getParent()));
+                                 move(DC), I->getParent()));
 
       if (ParsedDepHalfTypeStr.find("address dep") != string::npos)
         // Assume broken until proven wrong.
@@ -2250,10 +2041,8 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       // unoptimised IR, hence we only look for one dependency in optimised
       // IR.
       if (ParsedDepHalfTypeStr.find("address dep") != string::npos) {
-        bool ParsedFullDep = std::stoi(AnnotData[4]);
-
-        if (handleAddrDepID(ParsedID, I, ParsedDepHalfID, ParsedPathToViaFiles,
-                            ParsedFullDep)) {
+        if (handleAddrDepID(ParsedID, I, ParsedDepHalfID,
+                            ParsedPathToViaFiles)) {
           markIDAsVerified(ParsedID);
           continue;
         }
@@ -2261,7 +2050,7 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
         if (RemappedIDs->find(ParsedID) != RemappedIDs->end()) {
           for (auto const &RemappedID : RemappedIDs->at(ParsedID)) {
             if (handleAddrDepID(RemappedID, I, ParsedDepHalfID,
-                                ParsedPathToViaFiles, ParsedFullDep)) {
+                                ParsedPathToViaFiles)) {
               markIDAsVerified(ParsedID);
               break;
             }
@@ -2423,23 +2212,13 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
   errs() << "\nPath to (via files) from annotation: "
          << End.getParsedpathTOViaFiles() << "\n";
 
-  if (auto *VADE = dyn_cast<VerAddrDepEnd>(&End))
-    errs() << "\nFull dependency: " << (VADE->getParsedFullDep() ? "yes" : "no")
-           << "\n";
-
   errs() << "\nBroken " << End.getBrokenBy() << "\n\n";
 
   if (auto *VADB = dyn_cast<VerAddrDepBeg>(&Beg)) {
-    auto &DCP = VADB->getDCP();
-    auto &DCInter = DCP.DCInter;
-    auto &DCUnion = DCP.DCUnion;
+    auto &DCUnion = VADB->getDC();
 
     errs() << "Soure-level dep chains at " << getInstLocString(End.getInst())
            << "\n";
-
-    errs() << "\nIntersection of all dependency chains at the ending:\n";
-    for (auto &DCL : DCInter)
-      errs() << getInstLocString(cast<Instruction>(DCL.Val)) << "\n";
 
     errs() << "\nUnion of all dependency chains at the ending:\n";
     for (auto &DCL : DCUnion)
@@ -2449,22 +2228,14 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
 #define DEBUG_TYPE "lkmm-print-modules"
   LLVM_DEBUG(
       if (auto *VADB = dyn_cast<VerAddrDepBeg>(&Beg)) {
-        auto &DCP = VADB->getDCP();
-        auto &DCInter = DCP.DCInter;
-        auto &DCUnion = DCP.DCUnion;
+        auto &DC = VADB->getDC();
 
         dbgs() << "IR Dep chains at ";
         End.getInst()->print(dbgs());
         dbgs() << "\n";
 
-        dbgs() << "\nIntersection of all dependency chains at the ending:\n";
-        for (auto &DCL : DCInter) {
-          DCL.Val->print(dbgs());
-          dbgs() << "\n";
-        }
-
         dbgs() << "\nUnion of all dependency chains at the ending:\n";
-        for (auto &DCL : DCUnion) {
+        for (auto &DCL : DC) {
           DCL.Val->print(dbgs());
           dbgs() << "\n";
         }
