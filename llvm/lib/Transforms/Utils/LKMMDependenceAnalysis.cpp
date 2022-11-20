@@ -50,9 +50,10 @@
 // FIXME: can we generalise the visitor function s.t. we don't require the
 // DCLCmp and DCLAdd definitions for each of them?
 // FIXME: Brakcets with multiple levels of conditionals
-// FIXME: DCLCmp vs DCLAdd
-// FIXME: Remove evidence of partial dependencies
+// FIXME: DCLCmp vs DCLAdd FIXME: Remove evidence of partial dependencies
 // FIXME: n pte backward transposition will immediately make it ptr
+// FIXME: ADBs from totally different functions are being carried over and
+// iterated over just for the sake of knowing they exist.
 
 namespace llvm {
 static cl::opt<bool> InjectBugs(
@@ -968,7 +969,7 @@ protected:
   /// Spawns an interprocedural BFS from the current context.
   ///
   /// \param FirstBB the first BasicBlock of the called function.
-  /// \param CallI the call instructions which calls the function beginning with
+  /// \param CallB the call instructions which calls the function beginning with
   /// \p FirstBB.
   InterprocBFSRes runInterprocBFS(BasicBlock *FirstBB, CallBase *CallB);
 
@@ -1470,16 +1471,16 @@ void BFSCtx::prepareInterproc(BasicBlock *FirstBB, CallBase *CallB) {
 }
 
 // FIXME Duplciate code
-InterprocBFSRes BFSCtx::runInterprocBFS(BasicBlock *FirstBB, CallBase *CallI) {
+InterprocBFSRes BFSCtx::runInterprocBFS(BasicBlock *FirstBB, CallBase *CallB) {
   if (auto *AC = dyn_cast<AnnotCtx>(this)) {
-    AnnotCtx InterprocCtx = AnnotCtx(*AC, FirstBB, CallI);
+    AnnotCtx InterprocCtx = AnnotCtx(*AC, FirstBB, CallB);
     InterprocCtx.runBFS();
     return InterprocBFSRes(move(InterprocCtx.ReturnedADBs));
   }
   if (auto *VC = dyn_cast<VerCtx>(this)) {
-    VerCtx InterprocCtx = VerCtx(*VC, FirstBB, CallI);
+    VerCtx InterprocCtx = VerCtx(*VC, FirstBB, CallB);
     InterprocCtx.runBFS();
-    return InterprocBFSRes((InterprocCtx.ReturnedADBs));
+    return InterprocBFSRes(move(InterprocCtx.ReturnedADBs));
   }
   llvm_unreachable("Called runInterprocBFS() with no BFSCtx child.");
 }
@@ -1865,6 +1866,8 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
   for (auto &ADBP : ADBs) {
     auto &ADB = ADBP.second;
 
+    // If this ADB wasn't inherited, add it to RADBs so that the analysis can
+    // account for it when checking for broken beginnings.
     if (InheritedADBs.find(ADBP.first) == InheritedADBs.end())
       ReturnedADBs.emplace_back(ADB, DCLevel::PLCHLDR);
 
@@ -2040,8 +2043,8 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       DepChain DC;
       DC.insert(DCLink(I, DCLevel::PTR));
       ADBs.emplace(ParsedID, std::make_shared<PotAddrDepBeg>(
-                                 I, getFullPath(I), getFullPath(I, true),
-                                 move(DC), I->getParent()));
+                                 I, ParsedID, getFullPath(I, true), move(DC),
+                                 I->getParent()));
 
       if (ParsedDepHalfTypeStr.find("address dep") != string::npos)
         // Assume broken until proven wrong.
