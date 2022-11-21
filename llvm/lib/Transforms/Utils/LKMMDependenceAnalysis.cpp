@@ -189,7 +189,7 @@ string getInstLocString(Instruction *I, bool ViaFile = false) {
   const DebugLoc &InstDebugLoc = I->getDebugLoc();
 
   if (!InstDebugLoc)
-    return "no location";
+    return "value with no source code location";
 
   auto LiAndCol = "::" + to_string(InstDebugLoc.getLine()) + ":" +
                   to_string(InstDebugLoc.getCol());
