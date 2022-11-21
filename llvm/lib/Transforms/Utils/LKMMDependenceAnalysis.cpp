@@ -797,99 +797,120 @@ public:
   ///
   /// \param TruncI the trunc instruction to be handled.
   void visitTruncInst(TruncInst &TruncI) {
-    depChainThroughInst(TruncI, DCLink(TruncI.getOperand(0), DCLevel::PTR),
-                        SmallVector<DCLink>{DCLink(&TruncI, DCLevel::PTR)});
+    auto DCLAdd = DCLink(&TruncI, DCLevel::PTR);
+    auto DCLCmp = DCLink(TruncI.getOperand(0), DCLevel::PTR);
+
+    depChainThroughInst(TruncI, DCLAdd, SmallVector<DCLink>{DCLCmp});
   };
 
   /// Handle dep chains through zext instructions
   ///
   /// \param ZExtI the zext instruction to be handled.
   void visitZExtInst(ZExtInst &ZExtI) {
-    depChainThroughInst(ZExtI, DCLink(ZExtI.getOperand(0), DCLevel::PTR),
-                        SmallVector<DCLink>{DCLink(&ZExtI, DCLevel::PTR)});
+    auto DCLAdd = DCLink(&ZExtI, DCLevel::PTR);
+    auto DCLCmp = DCLink(ZExtI.getOperand(0), DCLevel::PTR);
+
+    depChainThroughInst(ZExtI, DCLAdd, SmallVector<DCLink>{DCLCmp});
   };
 
   /// Handle dep chains through sext instructions
   ///
   /// \param SExtI the sext instruction to be handled.
   void visitSExtInst(SExtInst &SExtI) {
-    depChainThroughInst(SExtI, DCLink(SExtI.getOperand(0), DCLevel::PTR),
-                        SmallVector<DCLink>{DCLink(&SExtI, DCLevel::PTR)});
+    auto DCLAdd = DCLink(&SExtI, DCLevel::PTR);
+    auto DCLCmp = DCLink(SExtI.getOperand(0), DCLevel::PTR);
+
+    depChainThroughInst(SExtI, DCLAdd, SmallVector<DCLink>{DCLCmp});
   };
 
   /// Handle dep chains through fptrunc instructions
   ///
   /// \param FPTruncI the fptrunc instruction to be handled.
   void visitFPTruncInst(FPTruncInst &FPTruncI) {
-    depChainThroughInst(FPTruncI, DCLink(FPTruncI.getOperand(0), DCLevel::PTR),
-                        SmallVector<DCLink>{DCLink(&FPTruncI, DCLevel::PTR)});
+    auto DCLAdd = DCLink(&FPTruncI, DCLevel::PTR);
+    auto DCLCmp = DCLink(FPTruncI.getOperand(0), DCLevel::PTR);
+
+    depChainThroughInst(FPTruncI, DCLAdd, SmallVector<DCLink>{DCLCmp});
   };
 
   /// Handle dep chains through fpext instructions
   ///
   /// \param FPExtI the fpext instruction to be handled.
   void visitFPExtInst(FPExtInst &FPExtI) {
-    depChainThroughInst(FPExtI, DCLink(FPExtI.getOperand(0), DCLevel::PTR),
-                        SmallVector<DCLink>{DCLink(&FPExtI, DCLevel::PTR)});
+    auto DCLAdd = DCLink(&FPExtI, DCLevel::PTR);
+    auto DCLCmp = DCLink(FPExtI.getOperand(0), DCLevel::PTR);
+
+    depChainThroughInst(FPExtI, DCLAdd, SmallVector<DCLink>{DCLCmp});
   };
 
   /// Handle dep chains through fptoui instructions
   ///
   /// \param FPToUII the fptoui instruction to be handled.
   void visitFPToUIInst(FPToUIInst &FPToUII) {
-    depChainThroughInst(FPToUII, DCLink(FPToUII.getOperand(0), DCLevel::PTR),
-                        SmallVector<DCLink>{DCLink(&FPToUII, DCLevel::PTR)});
+    auto DCLAdd = DCLink(&FPToUII, DCLevel::PTR);
+    auto DCLCmp = DCLink(FPToUII.getOperand(0), DCLevel::PTR);
+
+    depChainThroughInst(FPToUII, DCLAdd, SmallVector<DCLink>{DCLCmp});
   };
 
   /// Handle dep chains through uitofp instructions
   ///
   /// \param UIToFPI the uitofp instruction to be handled.
   void visitUIToFPInst(UIToFPInst &UIToFPI) {
-    depChainThroughInst(UIToFPI, DCLink(UIToFPI.getOperand(0), DCLevel::PTR),
-                        SmallVector<DCLink>{DCLink(&UIToFPI, DCLevel::PTR)});
+    auto DCLAdd = DCLink(&UIToFPI, DCLevel::PTR);
+    auto DCLCmp = DCLink(UIToFPI.getOperand(0), DCLevel::PTR);
+
+    depChainThroughInst(UIToFPI, DCLAdd, SmallVector<DCLink>{DCLCmp});
   };
 
   /// Handle dep chains through sitofp instructions
   ///
   /// \param SIToFPI the sitofp instruction to be handled.
-  void visitSIToFPInst(SIToFPInst &SIToFPI) {
-    depChainThroughInst(SIToFPI, DCLink(SIToFPI.getOperand(0), DCLevel::PTR),
-                        SmallVector<DCLink>{DCLink(&SIToFPI, DCLevel::PTR)});
+  void visitSIToFPInst(SIToFPInst &SIToFPII) {
+    auto DCLAdd = DCLink(&SIToFPII, DCLevel::PTR);
+    auto DCLCmp = DCLink(SIToFPII.getOperand(0), DCLevel::PTR);
+
+    depChainThroughInst(SIToFPII, DCLAdd, SmallVector<DCLink>{DCLCmp});
   };
 
   /// Handle dep chains through ptrtoint instructions
   ///
   /// \param PtrToIntI the ptrtoint instruction to be handled.
-  void visitPtrToIntInst(PtrToIntInst &PtrToIntI) {
-    depChainThroughInst(PtrToIntI,
-                        DCLink(PtrToIntI.getOperand(0), DCLevel::PTR),
-                        SmallVector<DCLink>{DCLink(&PtrToIntI, DCLevel::PTR)});
+  void visitPtrToIntInst(PtrToIntInst &IntToPtrI) {
+    auto DCLAdd = DCLink(&IntToPtrI, DCLevel::PTR);
+    auto DCLCmp = DCLink(IntToPtrI.getOperand(0), DCLevel::PTR);
+
+    depChainThroughInst(IntToPtrI, DCLAdd, SmallVector<DCLink>{DCLCmp});
   };
 
   /// Handle dep chains through inttoptr instructions
   ///
   /// \param IntToPtrI the inttoptr instruction to be handled.
   void visitIntToPtrInst(IntToPtrInst &IntToPtrI) {
-    depChainThroughInst(IntToPtrI,
-                        DCLink(IntToPtrI.getOperand(0), DCLevel::PTR),
-                        SmallVector<DCLink>{DCLink(&IntToPtrI, DCLevel::PTR)});
+    auto DCLAdd = DCLink(&IntToPtrI, DCLevel::PTR);
+    auto DCLCmp = DCLink(IntToPtrI.getOperand(0), DCLevel::PTR);
+
+    depChainThroughInst(IntToPtrI, DCLAdd, SmallVector<DCLink>{DCLCmp});
   };
 
   /// Handle dep chains through bitcast instructions
   ///
   /// \param BitCastI the bitcast instruction to be handled.
   void visitBitCastInst(BitCastInst &BitCastI) {
-    depChainThroughInst(BitCastI, DCLink(BitCastI.getOperand(0), DCLevel::PTR),
-                        SmallVector<DCLink>{DCLink(&BitCastI, DCLevel::PTR)});
+    auto DCLAdd = DCLink(&BitCastI, DCLevel::PTR);
+    auto DCLCmp = DCLink(BitCastI.getOperand(0), DCLevel::PTR);
+
+    depChainThroughInst(BitCastI, DCLAdd, SmallVector<DCLink>{DCLCmp});
   };
 
   /// Handle dep chains through addrspacecast instructions
   ///
   /// \param AddrSpaceCastI the addrspacecast instruction to be handled.
   void visitAddrSpaceCastInst(AddrSpaceCastInst &AddrSpaceCastI) {
-    depChainThroughInst(
-        AddrSpaceCastI, DCLink(AddrSpaceCastI.getOperand(0), DCLevel::PTR),
-        SmallVector<DCLink>{DCLink(&AddrSpaceCastI, DCLevel::PTR)});
+    auto DCLAdd = DCLink(&AddrSpaceCastI, DCLevel::PTR);
+    auto DCLCmp = DCLink(AddrSpaceCastI.getOperand(0), DCLevel::PTR);
+
+    depChainThroughInst(AddrSpaceCastI, DCLAdd, SmallVector<DCLink>{DCLCmp});
   };
 
   /// Shared functionality for dep chains running through instructions.
