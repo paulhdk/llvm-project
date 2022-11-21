@@ -636,13 +636,6 @@ public:
   /// \param BB the BasicBlock to be visited.
   void visitBasicBlock(BasicBlock &BB);
 
-  /// Visits any instruction which does not match any concrete or excluded case
-  /// below. Checks if any dependency chains run through \p I.
-  ///
-  /// \param I the instruction which did not match any concrete or excluded
-  ///  case.
-  void visitInstruction(Instruction &I);
-
   //===--------------------------------------------------------------------===//
   // Visitor Functions - Terminator Instructions
   //===--------------------------------------------------------------------===//
@@ -693,7 +686,12 @@ public:
   /// Handle dep chains through unary operator
   ///
   /// \param UnOp the unary operator to be handled.
-  void visitUnaryOperator(UnaryOperator &UnOp) { visitInstruction(UnOp); };
+  void visitUnaryOperator(UnaryOperator &UnOp) {
+    auto DCLAdd = DCLink(&UnOp, DCLevel::PTR);
+    auto DCLCmp = DCLink(UnOp.getOperand(0), DCLevel::PTR);
+
+    depChainThroughInst(UnOp, DCLAdd, SmallVector<DCLink>{DCLCmp});
+  };
 
   //===--------------------------------------------------------------------===//
   // Visitor Functions - (Bitwise) Binary Instructions
@@ -702,7 +700,13 @@ public:
   /// Handle dep chains through binary and bitwise binary operators
   ///
   /// \param BinOp the (bitwise) binary operator to be handled.
-  void visitBinaryOperator(BinaryOperator &BinOp) { visitInstruction(BinOp); };
+  void visitBinaryOperator(BinaryOperator &BinOp) {
+    auto DCLAdd = DCLink(&BinOp, DCLevel::PTR);
+    auto DCLCmp1 = DCLink(BinOp.getOperand(0), DCLevel::PTR);
+    auto DCLCmp2 = DCLink(BinOp.getOperand(1), DCLevel::PTR);
+
+    depChainThroughInst(BinOp, DCLAdd, SmallVector<DCLink>{DCLCmp1, DCLCmp2});
+  }
 
   //===--------------------------------------------------------------------===//
   // Visitor Functions - Vector Instructions
@@ -711,23 +715,17 @@ public:
   /// Handle dep chains through extract element instructions
   ///
   /// \param EEI the extract element instruction to be handled.
-  void visitExtractElementInst(ExtractElementInst &EEI) {
-    visitInstruction(EEI);
-  };
+  void visitExtractElementInst(ExtractElementInst &EEI){};
 
   /// Handle dep chains through insert element instructions
   ///
   /// \param IEI the insert element instruction to be handled.
-  void visitInsertElementInst(InsertElementInst &IEI) {
-    visitInstruction(IEI);
-  };
+  void visitInsertElementInst(InsertElementInst &IEI){};
 
   /// Handle dep chains through shuffle vector instructions
   ///
   /// \param SVI the shuffle vector instruction to be handled.
-  void visitShuffleVectorInst(ShuffleVectorInst &SVI) {
-    visitInstruction(SVI);
-  };
+  void visitShuffleVectorInst(ShuffleVectorInst &SVI){};
 
   //===--------------------------------------------------------------------===//
   // Visitor Functions - Aggregate Instructions
@@ -736,12 +734,28 @@ public:
   /// Handle dep chains through extract value instructions
   ///
   /// \param EVI the extract value instruction to be handled.
-  void visitextractvalueInst(ExtractValueInst &EVI) { visitInstruction(EVI); };
+  void visitextractvalueInst(ExtractValueInst &EVI) {
+    auto DCLAdd = DCLink(&EVI, DCLevel::PTR);
+    SmallVector<DCLink, 6> DCLCmps = {};
+
+    for (auto &Op : EVI.operands())
+      DCLCmps.push_back(DCLink(Op, DCLevel::PTR));
+
+    depChainThroughInst(EVI, DCLAdd, DCLCmps);
+  }
 
   /// Handle dep chains through insert value instructions
   ///
   /// \param IVI the insert value instruction to be handled.
-  void visitInsertValueInst(InsertValueInst &IVI) { visitInstruction(IVI); };
+  void visitInsertValueInst(InsertValueInst &IVI) {
+    auto DCLAdd = DCLink(&IVI, DCLevel::PTR);
+    SmallVector<DCLink, 6> DCLCmps = {};
+
+    for (auto &Op : IVI.operands())
+      DCLCmps.push_back(DCLink(Op, DCLevel::PTR));
+
+    depChainThroughInst(IVI, DCLAdd, DCLCmps);
+  };
 
   //===--------------------------------------------------------------------===//
   // Visitor Functions - Memory Access and Addressing Operations
@@ -1640,23 +1654,6 @@ string BFSCtx::buildInlineString(Instruction *I) {
 //===----------------------------------------------------------------------===//
 
 void BFSCtx::visitBasicBlock(BasicBlock &BB) { this->BB = &BB; }
-
-void BFSCtx::visitInstruction(Instruction &I) {
-  for (auto &ADBP : ADBs) {
-    for (unsigned Ind = 0; Ind < I.getNumOperands(); ++Ind) {
-      auto &ADB = ADBP.second;
-
-      auto *VCmp = I.getOperand(Ind);
-      auto *VAdd = cast<Value>(&I);
-
-      ADB->tryAddValueToDepChains(I, DCLink(VAdd, DCLevel::PTR),
-                                  DCLink(VCmp, DCLevel::PTR));
-
-      ADB->tryAddValueToDepChains(I, DCLink(VAdd, DCLevel::PTE),
-                                  DCLink(VCmp, DCLevel::PTE));
-    }
-  }
-}
 
 void BFSCtx::handleCall(CallBase &CallB) {
   auto *CalledF = CallB.getCalledFunction();
