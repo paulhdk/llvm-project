@@ -264,8 +264,23 @@ public:
   /// \param R set to true if control flow is returning to this function call,
   /// set to false if control flow is entering this function call
   void addStepToPathFrom(CallBase *CallB, bool R = false) {
-    PathFrom += (getInstLocString(CallB) + (R ? "<-" : "->") +
-                 CallB->getCalledFunction()->getName().str() + "()\n");
+    auto *CalledF = CallB->getCalledFunction();
+
+    if (CalledF)
+      PathFrom += (getInstLocString(CallB) + (R ? "<-" : "->") +
+                   CalledF->getName().str() + "()\n");
+  }
+
+  /// Resets a PathFrom string to the point before the given function call.
+  /// This is used when a dependency runs into a function but doesn't get
+  /// returned.
+  ///
+  /// \param CallB the function call to reset the PathFrom string to
+  void resetPathFromTo(CallBase *CallB) {
+    auto Ind = PathFrom.find(getInstLocString(CallB));
+
+    if (Ind != std::string::npos)
+      PathFrom.erase(Ind);
   }
 
   DepKind getKind() const { return Kind; }
@@ -299,7 +314,8 @@ class PotAddrDepBeg : public DepHalf {
 public:
   PotAddrDepBeg(Instruction *I, string ID, string PathToViaFiles, DepChain DC,
                 BasicBlock *BB)
-      : DepHalf(I, ID, PathToViaFiles, DK_AddrBeg), FToDCM() {
+      : DepHalf(I, ID, PathToViaFiles, DK_AddrBeg), FToDCM(),
+        RetLvl(DCLevel::PLCHLDR) {
     FToDCM.insert({BB->getParent(), DepChainMap()});
     FToDCM[BB->getParent()].insert({BB, DC});
   }
@@ -408,7 +424,22 @@ public:
   /// Deletes the DepChainMap for the given function if it exists.
   ///
   /// \param F the function whose DepChainMap should be deleted.
-  void deleteDCM(Function *F) { FToDCM.erase(F); }
+  void deleteDCM(Function *F) {
+    if (F)
+      FToDCM.erase(F);
+  }
+
+  /// Set the level at which this PotAddrDepBeg gets returned in the current
+  /// function.
+  ///
+  /// \param Level the level at which this PotAddrDepBeg gets returned.
+  void setReturnedAt(DCLevel Lvl) { RetLvl = Lvl; }
+
+  /// Get the level at which this PotAddrDepBeg gets returned in the current
+  /// function.
+  ///
+  /// \returns the level at which this PotAddrDepBeg gets returned.
+  const DCLevel &getReturnedAt() const { return RetLvl; }
 
   static bool classof(const DepHalf *VDH) {
     return VDH->getKind() == DK_AddrBeg;
@@ -431,7 +462,12 @@ public:
   }
 
 private:
+  /// Maps functions to their respective dep chain maps.
   MapVector<Function *, DepChainMap> FToDCM;
+
+  /// Set to the level at which this beginning is being returned in the current
+  /// function
+  DCLevel RetLvl;
 
   /// Helper function for progressDCPaths(). Used for computing an intersection
   /// of dep chains.
@@ -530,7 +566,7 @@ public:
   }
 };
 
-using InterprocBFSRes = list<pair<shared_ptr<PotAddrDepBeg>, DCLevel>>;
+using InterprocBFSRes = DepHalfMap<shared_ptr<PotAddrDepBeg>>;
 
 //===----------------------------------------------------------------------===//
 // The BFS Context Hierarchy
@@ -545,8 +581,7 @@ public:
   CtxKind getKind() const { return Kind; }
 
   BFSCtx(BasicBlock *BB, CtxKind CK)
-      : BB(BB), ADBs(), ReturnedADBs(), CallPath(new CallPathStack()),
-        Kind(CK){};
+      : BB(BB), ADBs(), CallPath(new CallPathStack()), Kind(CK){};
 
   virtual ~BFSCtx() {
     if (!CallPath->empty())
@@ -950,13 +985,6 @@ protected:
   // All potential address dependency beginnings (ADBs) which are being tracked.
   DepHalfMap<shared_ptr<PotAddrDepBeg>> ADBs;
 
-  // Potential beginnings where the return value is part of the dep chain.
-  list<pair<shared_ptr<PotAddrDepBeg>, DCLevel>> ReturnedADBs;
-
-  /// Contains all IDs that ran into this context via function arguments if this
-  /// is an interprocedural context.
-  unordered_set<string> InheritedADBs;
-
   // The path which the BFS took to reach BB.
   shared_ptr<CallPathStack> CallPath;
 
@@ -1123,7 +1151,6 @@ public:
   // this?
   AnnotCtx(AnnotCtx &AC, BasicBlock *FirstBB, CallBase *CallB) : AnnotCtx(AC) {
     prepareInterproc(FirstBB, CallB);
-    ReturnedADBs.clear();
   }
 
   /// Inserts the bugs in the testing functions. Will output to errs() if the
@@ -1142,10 +1169,9 @@ public:
 
 class VerCtx : public BFSCtx {
 public:
-  VerCtx(BasicBlock *BB, std::shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs,
-         std::shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs,
-         std::shared_ptr<IDReMap> RemappedIDs,
-         std::shared_ptr<VerIDSet> VerifiedIDs)
+  VerCtx(BasicBlock *BB, shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs,
+         shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs,
+         shared_ptr<IDReMap> RemappedIDs, shared_ptr<VerIDSet> VerifiedIDs)
       : BFSCtx(BB, CK_Ver), BrokenADBs(BrokenADBs), BrokenADEs(BrokenADEs),
         RemappedIDs(RemappedIDs), VerifiedIDs(VerifiedIDs) {}
 
@@ -1154,7 +1180,6 @@ public:
   // this?
   VerCtx(VerCtx &VC, BasicBlock *FirstBB, CallBase *CallB) : VerCtx(VC) {
     prepareInterproc(FirstBB, CallB);
-    ReturnedADBs.clear();
   }
 
   /// Responsible for handling an instruction with at least one '!annotation'
@@ -1189,15 +1214,15 @@ public:
 
 private:
   // Contains all unverified address dependency beginning annotations.
-  std::shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs;
+  shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs;
   // Contains all unverified address dependency ending annotations.
-  std::shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs;
+  shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs;
 
   // All remapped IDs which were discovered from the current root function.
-  std::shared_ptr<IDReMap> RemappedIDs;
+  shared_ptr<IDReMap> RemappedIDs;
 
   // Contains all IDs which have been verified in the current module.
-  std::shared_ptr<VerIDSet> VerifiedIDs;
+  shared_ptr<VerIDSet> VerifiedIDs;
 
   /// Responsible for handling a single address dependency ending annotation.
   ///
@@ -1304,6 +1329,9 @@ void PotAddrDepBeg::deleteDCsAt(BasicBlock *BB,
 }
 
 void PotAddrDepBeg::addToDCUnion(BasicBlock *BB, DCLink DCL) {
+  if (isa<ConstantData>(DCL.Val))
+    return;
+
   FToDCM[BB->getParent()][BB].insert(DCL);
 }
 
@@ -1450,16 +1478,14 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
         for (auto DA : DepArgs)
           ADB->addToDCUnion(FirstBB, move(DA));
 
-        InheritedADBs.insert(ParsedID);
       } else if (auto *VC = dyn_cast<VerCtx>(this)) {
         // Mark dependencies through external or empty functions as trivially
         // verified in VerCtx
         VC->markIDAsVerified(ParsedID);
       }
     }
+    DepArgs.clear();
   }
-
-  DepArgs.clear();
 }
 
 void BFSCtx::prepareInterproc(BasicBlock *FirstBB, CallBase *CallB) {
@@ -1475,12 +1501,12 @@ InterprocBFSRes BFSCtx::runInterprocBFS(BasicBlock *FirstBB, CallBase *CallB) {
   if (auto *AC = dyn_cast<AnnotCtx>(this)) {
     AnnotCtx InterprocCtx = AnnotCtx(*AC, FirstBB, CallB);
     InterprocCtx.runBFS();
-    return InterprocBFSRes(move(InterprocCtx.ReturnedADBs));
+    return InterprocBFSRes(move(InterprocCtx.ADBs));
   }
   if (auto *VC = dyn_cast<VerCtx>(this)) {
     VerCtx InterprocCtx = VerCtx(*VC, FirstBB, CallB);
     InterprocCtx.runBFS();
-    return InterprocBFSRes(move(InterprocCtx.ReturnedADBs));
+    return InterprocBFSRes(move(InterprocCtx.ADBs));
   }
   llvm_unreachable("Called runInterprocBFS() with no BFSCtx child.");
 }
@@ -1673,18 +1699,39 @@ void BFSCtx::handleCall(CallBase &CallB) {
   auto *VAdd = cast<Value>(&CallB);
 
   // Handle returned addr deps.
+  // FIXME: unneccessary iterations here as RADBsFromCall and ADBs probably
+  // share a lot of PotAddrDepBeg's.
   for (auto &RADBP : RADBsFromCall) {
-    auto &RADB = RADBP.first;
-    auto &Lvl = RADBP.second;
-    DCLink DCLAdd = {VAdd, Lvl};
+    auto &ID = RADBP.first;
+    auto &RADB = RADBP.second;
 
     // Inserts if ADB doesn't already exist
-    ADBs.insert(pair{RADB->getID(), RADB});
+    if (ADBs.find(ID) == ADBs.end())
+      ADBs.insert(pair{ID, RADB});
 
-    if (Lvl != DCLevel::PLCHLDR)
-      RADB->addToDCUnion(BB, DCLAdd);
+    auto &Lvl = RADB->getReturnedAt();
+    auto &ADB = ADBs.at(ID);
 
-    RADB->addStepToPathFrom(&CallB, true);
+    switch (Lvl) {
+    case DCLevel::PTR:
+      ADB->addToDCUnion(BB, DCLink{VAdd, DCLevel::PTR});
+      ADB->addStepToPathFrom(&CallB, true);
+      break;
+    case DCLevel::PTE:
+      ADB->addToDCUnion(BB, DCLink{VAdd, DCLevel::PTE});
+      ADB->addStepToPathFrom(&CallB, true);
+      break;
+    case DCLevel::BOTH:
+      ADB->addToDCUnion(BB, DCLink{VAdd, DCLevel::PTR});
+      ADB->addToDCUnion(BB, DCLink{VAdd, DCLevel::PTE});
+      ADB->addStepToPathFrom(&CallB, true);
+      break;
+    default:
+      ADB->resetPathFromTo(&CallB);
+      break;
+    }
+
+    ADB->setReturnedAt(DCLevel::PLCHLDR);
   }
 }
 
@@ -1745,7 +1792,7 @@ bool BFSCtx::storeOverwritesDCValue(StoreInst &StoreI,
 
   // Overwrites iff we store non-dc value to a pointee value in a dep chain
   if (ADB->belongsToDepChain(StoreI.getParent(), StoreDst) &&
-      (!ADB->belongsToDepChain(StoreI.getParent(), StoreSrcPTR) ||
+      (!ADB->belongsToDepChain(StoreI.getParent(), StoreSrcPTR) &&
        !ADB->belongsToDepChain(StoreI.getParent(), StoreSrcPTE)))
     return true;
 
@@ -1857,25 +1904,25 @@ void BFSCtx::visitSelectInst(SelectInst &SelectI) {
 
 void BFSCtx::visitReturnInst(ReturnInst &RetI) {
   auto *RetVal = RetI.getReturnValue();
-  auto RetLinkPTR = DCLink(RetVal, DCLevel::PTR);
-  auto RetLinkPTE = DCLink(RetVal, DCLevel::PTE);
 
   if (!recLevel() || !RetVal)
     return;
 
+  auto RetLinkPTR = DCLink(RetVal, DCLevel::PTR);
+  auto RetLinkPTE = DCLink(RetVal, DCLevel::PTE);
+
   for (auto &ADBP : ADBs) {
     auto &ADB = ADBP.second;
 
-    // If this ADB wasn't inherited, add it to RADBs so that the analysis can
-    // account for it when checking for broken beginnings.
-    if (InheritedADBs.find(ADBP.first) == InheritedADBs.end())
-      ReturnedADBs.emplace_back(ADB, DCLevel::PLCHLDR);
+    auto RetAtPTR = ADB->belongsToDepChain(BB, RetLinkPTR);
+    auto RetAtPTE = ADB->belongsToDepChain(BB, RetLinkPTE);
 
-    if (ADB->belongsToDepChain(BB, RetLinkPTR))
-      ReturnedADBs.emplace_back(ADB, DCLevel::PTR);
-
-    if (ADB->belongsToDepChain(BB, RetLinkPTE))
-      ReturnedADBs.emplace_back(ADB, DCLevel::PTE);
+    if (RetAtPTR && RetAtPTE)
+      ADB->setReturnedAt(DCLevel::BOTH);
+    else if (RetAtPTR)
+      ADB->setReturnedAt(DCLevel::PTR);
+    else if (RetAtPTE)
+      ADB->setReturnedAt(DCLevel::PTE);
 
     ADB->deleteDCM(BB->getParent());
   }
@@ -2092,14 +2139,14 @@ public:
 
 private:
   // Contains all unverified address dependency beginning annotations.
-  std::shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs;
+  shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs;
 
   // Contains all unverified address dependency ending annotations.
-  std::shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs;
+  shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs;
 
-  std::shared_ptr<IDReMap> RemappedIDs;
+  shared_ptr<IDReMap> RemappedIDs;
 
-  std::shared_ptr<unordered_set<string>> VerifiedIDs;
+  shared_ptr<unordered_set<string>> VerifiedIDs;
 
   unordered_set<string> PrintedBrokenIDs;
 
