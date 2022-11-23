@@ -2206,10 +2206,54 @@ private:
 
   unordered_set<Module *> PrintedModules;
 
+  /// Maps the reduced IDs of the same beginning / ending to the shortest
+  /// VerAddDepBeg with that ending plus the length of its ID.  An ID is reduced
+  /// if it excludes the path from the beginning to the end and only contains
+  /// the beginning location and the ending location.
+  StringMap<pair<VerAddrDepBeg *, unsigned>> MinLengthPerBegEndPair;
+
   /// Prints broken dependencies.
   void printBrokenDeps();
 
   void printBrokenDep(VerDepHalf &Beg, VerDepHalf &End, const string &ID);
+
+  void onlyPrintShortestDep() {
+    for (auto VADBPIt = BrokenADBs->begin(); VADBPIt != BrokenADBs->end();) {
+      auto RdcdID = VADBPIt->first;
+      auto &OgID = VADBPIt->first;
+      auto &VADB = VADBPIt->second;
+
+      // Reduce ID
+      auto F = RdcdID.find_first_of('\n', 2);
+      auto L = RdcdID.find_last_of('\n', RdcdID.length() - 3);
+      RdcdID.erase(F, L - F);
+
+      // Check ID in ShortestLengthPerBegEndPair
+      // FIXME: do I need to account for the increments here?
+      if (MinLengthPerBegEndPair.find(RdcdID) == MinLengthPerBegEndPair.end()) {
+        MinLengthPerBegEndPair.insert(pair{RdcdID, pair{&VADB, OgID.length()}});
+
+        ++VADBPIt;
+      } else if (MinLengthPerBegEndPair[RdcdID].second > OgID.length()) {
+        auto OldID = MinLengthPerBegEndPair[RdcdID].first->getID();
+        MinLengthPerBegEndPair[RdcdID] = pair{&VADB, OgID.length()};
+
+        BrokenADBs->erase(OldID);
+
+        if (BrokenADEs->find(OldID) != BrokenADEs->end())
+          BrokenADEs->erase(OldID);
+
+        ++VADBPIt;
+      } else {
+        auto Del = VADBPIt++;
+
+        BrokenADBs->erase(Del);
+
+        if (BrokenADEs->find(OgID) != BrokenADEs->end())
+          BrokenADEs->erase(OgID);
+      }
+    }
+  }
 };
 
 PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
@@ -2274,6 +2318,8 @@ PreservedAnalyses LKMMVerifier::run(Module &M, ModuleAnalysisManager &AM) {
 
     VC.runBFS();
   }
+
+  onlyPrintShortestDep();
 
   printBrokenDeps();
 
