@@ -2224,7 +2224,7 @@ private:
   void onlyPrintShortestDep() {
     for (auto VADBPIt = BrokenADBs->begin(); VADBPIt != BrokenADBs->end();) {
       auto RdcdID = VADBPIt->first;
-      auto &OgID = VADBPIt->first;
+      string OgID = VADBPIt->first;
       auto &VADB = VADBPIt->second;
 
       // Reduce ID
