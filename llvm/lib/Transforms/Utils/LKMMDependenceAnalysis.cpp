@@ -1743,6 +1743,8 @@ void BFSCtx::handleCall(CallBase &CallB) {
     auto ID = RADB.ADB.getID();
     auto &Lvl = RADB.Lvl;
 
+    // This ensuers that either the returned ADB exists in the current context's
+    // ADBs or we continue.
     if (RADB.DiscoveredInInterproc) {
       if (Lvl != DCLevel::PLCHLDR) {
         ADBs.emplace(ID, move(RADB.ADB));
@@ -1756,20 +1758,22 @@ void BFSCtx::handleCall(CallBase &CallB) {
 
     auto &ADB = ADBs.at(ID);
 
+    if (!RADB.DiscoveredInInterproc)
+      ADB.addStepToPathFrom(&CallB);
+
+    ADB.addStepToPathFrom(&CallB, true);
+
     // FIXME: Can this be made nicer?
     switch (Lvl) {
     case DCLevel::PTR:
       ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTR});
-      ADB.addStepToPathFrom(&CallB, true);
       break;
     case DCLevel::PTE:
       ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTE});
-      ADB.addStepToPathFrom(&CallB, true);
       break;
     case DCLevel::BOTH:
       ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTR});
       ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTE});
-      ADB.addStepToPathFrom(&CallB, true);
       break;
     default:
       break;
