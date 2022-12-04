@@ -1529,6 +1529,7 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
       }
       ++It;
     } else {
+      // FIXME: Are we using outsideIDs?
       // If we don't have any dependent arguments, we can remove the ADB
       if (auto *VC = dyn_cast<VerCtx>(this))
         VC->addToOutsideIDs(ID);
@@ -1926,8 +1927,8 @@ void BFSCtx::visitPHINode(PHINode &PhiI) {
     DCLCmpsPTE.emplace_back(PhiI.getIncomingValue(Ind), DCLevel::PTE);
   }
 
-  depChainThroughInst(PhiI, DCLink(&PhiI, DCLevel::PTR), move(DCLCmpsPTR));
-  depChainThroughInst(PhiI, DCLink(&PhiI, DCLevel::PTE), move(DCLCmpsPTE));
+  depChainThroughInst(PhiI, DCLink(&PhiI, DCLevel::PTR), DCLCmpsPTR);
+  depChainThroughInst(PhiI, DCLink(&PhiI, DCLevel::PTE), DCLCmpsPTE);
 }
 
 void BFSCtx::visitSelectInst(SelectInst &SelectI) {
