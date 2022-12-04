@@ -1932,17 +1932,18 @@ void BFSCtx::visitPHINode(PHINode &PhiI) {
 
 void BFSCtx::visitSelectInst(SelectInst &SelectI) {
   auto *CV = SelectI.getCondition();
-  auto *TV = SelectI.getCondition();
-  auto *FV = SelectI.getCondition();
-  auto DCLAdd = DCLink(&SelectI, DCLevel::PTR);
+  auto *TV = SelectI.getTrueValue();
+  auto *FV = SelectI.getFalseValue();
+  auto DCLAddPTR = DCLink(&SelectI, DCLevel::PTR);
+  auto DCLAddPTE = DCLink(&SelectI, DCLevel::PTE);
 
-  depChainThroughInst(SelectI, DCLink(&SelectI, DCLevel::PTR),
+  depChainThroughInst(SelectI, DCLAddPTR,
                       SmallVector<DCLink>{DCLink(CV, DCLevel::PTR),
                                           DCLink(TV, DCLevel::PTR),
                                           DCLink(FV, DCLevel::PTR)});
 
   depChainThroughInst(
-      SelectI, DCLink(&SelectI, DCLevel::PTE),
+      SelectI, DCLAddPTE,
       SmallVector<DCLink>{DCLink(TV, DCLevel::PTE), DCLink(FV, DCLevel::PTE)});
 }
 
