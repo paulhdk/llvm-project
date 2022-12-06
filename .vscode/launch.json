@@ -14,6 +14,16 @@
             "cwd": "${env:LINUX}",
             "terminal": "console",
             "postDebugTask": "removCompileArgsFile"
+        },
+        {
+            "name": "LLDB Compile Command",
+            "type": "lldb",
+            "preLaunchTask": "LLVM Build Clang",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/clang",
+            "args": "",
+            "cwd": "${env:LINUX}",
+            "terminal": "console",
         }
     ],
     "inputs": [
