@@ -1284,8 +1284,8 @@ private:
   ///  \p Inst.
   ///
   /// \returns true if the address dependency could be verified.
-  bool handleAddrDepID(string const &ID, Instruction *I, string &ParsedPathTo,
-                       string &ParsedPathToViaFiles);
+  bool isADBBroken(string const &ID, Instruction *I, string &ParsedPathTo,
+                   string &ParsedPathToViaFiles);
 
   /// Responsible for updating an ID if the verification pass has encountered
   /// it before. Will add the updated ID to \p RemappedIDs.
@@ -2049,9 +2049,9 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
 // VerCtx Implementations
 //===----------------------------------------------------------------------===//
 
-bool VerCtx::handleAddrDepID(string const &ID, Instruction *I,
-                             string &ParsedDepHalfID,
-                             string &ParsedPathToViaFiles) {
+bool VerCtx::isADBBroken(string const &ID, Instruction *I,
+                         string &ParsedDepHalfID,
+                         string &ParsedPathToViaFiles) {
   auto DCLCmp = DCLink(nullptr, DCLevel::PTR);
 
   if (auto *SI = dyn_cast<StoreInst>(I))
@@ -2061,16 +2061,21 @@ bool VerCtx::handleAddrDepID(string const &ID, Instruction *I,
   else
     llvm_unreachable("Non-store or non-load instruction in handleAddrDepID().");
 
-  // FIXME: How can this be made nicer
   auto PartOfADBs = ADBs.find(ID) != ADBs.end();
   auto PartOfOutsideIDs = OutsideIDs.find(ID) != OutsideIDs.end();
 
-  // FIXME: this looks very uncomfortable
+  // FIXME: formatting looks very uncomfortable here
   // We only add the current annotation as a broken ending if the current
   // BFS has seen the beginning ID. If we were to add unconditionally, we
   // might add endings which aren't actually reachable by the corresponding.
   // Such cases would then be false positivies.
   if (PartOfADBs || PartOfOutsideIDs) {
+    // We have to account for the fact that annotations might get removed for
+    // example and therefore we might not have seen the corresponding beginning
+    // annotation.
+    if (BrokenADBs->find(ID) == BrokenADBs->end())
+      return false;
+
     auto &VADB = BrokenADBs->at(ID);
     auto BrokenBy = VerDepHalf::BrokenDC;
 
@@ -2166,16 +2171,15 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       // in unoptimised IR, hence we only look for one dependency in
       // optimised IR.
       if (ParsedDepHalfTypeStr.find("address dep") != string::npos) {
-        if (handleAddrDepID(ParsedID, I, ParsedDepHalfID,
-                            ParsedPathToViaFiles)) {
+        if (isADBBroken(ParsedID, I, ParsedDepHalfID, ParsedPathToViaFiles)) {
           markIDAsVerified(ParsedID);
           continue;
         }
 
         if (RemappedIDs->find(ParsedID) != RemappedIDs->end()) {
           for (auto const &RemappedID : RemappedIDs->at(ParsedID)) {
-            if (handleAddrDepID(RemappedID, I, ParsedDepHalfID,
-                                ParsedPathToViaFiles)) {
+            if (isADBBroken(RemappedID, I, ParsedDepHalfID,
+                            ParsedPathToViaFiles)) {
               markIDAsVerified(ParsedID);
               break;
             }
