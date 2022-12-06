@@ -18,7 +18,9 @@
 				"build",
 				"clang"
 			],
-			"problemMatcher": []
+			"problemMatcher": [
+				"$gcc"
+			]
 		},
 		{
 			"type": "shell",
@@ -28,7 +30,9 @@
 				"build",
 				"${input:target}"
 			],
-			"problemMatcher": []
+			"problemMatcher": [
+				"$gcc"
+			]
 		},
 		{
 			"label": "produceCompileArgsFile",
