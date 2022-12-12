@@ -434,9 +434,14 @@ public:
     }
   }
 
-  void resetDCMTo(BasicBlock *BB) {
+  /// Resets the dep chain map completely, i.e. clear it, or to a given BB.
+  ///
+  /// \param ToBB optional BB to which the dep chain map should be reset.
+  void resetDCM(BasicBlock *ToBB = nullptr) {
     DCM.clear();
-    DCM.insert(pair{BB, DepChain{}});
+
+    if (ToBB)
+      DCM.insert(pair{ToBB, DepChain{}});
   }
 
 private:
@@ -1516,7 +1521,7 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
       if (FirstBB) {
         ADB.addStepToPathFrom(CallB);
 
-        ADB.resetDCMTo(FirstBB);
+        ADB.resetDCM(FirstBB);
 
         for (auto DA : DepArgs)
           ADB.addToDCUnion(FirstBB, move(DA));
@@ -1749,7 +1754,7 @@ void BFSCtx::handleCall(CallBase &CallB) {
     if (RADB.DiscoveredInInterproc) {
       if (Lvl != DCLevel::PLCHLDR) {
         ADBs.emplace(ID, move(RADB.ADB));
-        ADBs.at(ID).resetDCMTo(BB);
+        ADBs.at(ID).resetDCM(BB);
       } else {
         if (auto *VC = dyn_cast<VerCtx>(this))
           VC->addToOutsideIDs(RADB.ADB.getID());
