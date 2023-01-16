@@ -423,12 +423,16 @@ public:
   /// Prints the dep chain union. Used for debugging.
   ///
   /// \param BB the BB whose dep chain union should be printed.
-  void printDepChainAt(BasicBlock *BB) {
-    if (!isAt(BB))
+  void printDepChainAt(BasicBlock *BB) const {
+    auto BBIt = DCM.find(BB);
+
+    if (BBIt == DCM.end())
       return;
 
+    auto &DCU = BBIt->second;
+
     errs() << "printing DCUnion\n";
-    for (auto &DCL : DCM[BB]) {
+    for (auto &DCL : DCU) {
       DCL.Val->print(errs());
       errs() << (DCL.Lvl == DCLevel::PTE ? " PTE " : " PTR ") << "\n";
     }
