@@ -71,6 +71,7 @@ static cl::opt<bool> FullToPartialOpt(
 
 // Avoid the std:: qualifier if possible
 using std::list;
+using std::make_shared;
 using std::move;
 using std::pair;
 using std::shared_ptr;
@@ -556,16 +557,46 @@ public:
   }
 };
 
-struct ReturnedADB {
+struct InterprocRetAddrDep {
+  /// Discriminator for LLVM-style RTTI (dyn_cast<> et al.)
+  enum IRADBKind { IRADBKind_Overwritten, IRADBKind_Returned };
+
   PotAddrDepBeg ADB;
+
+  InterprocRetAddrDep(PotAddrDepBeg ADB, IRADBKind Kind)
+      : ADB(ADB), Kind(Kind) {}
+
+  IRADBKind getKind() const { return Kind; }
+
+private:
+  const IRADBKind Kind;
+};
+
+struct ReturnedADB : InterprocRetAddrDep {
   DCLevel Lvl;
   bool DiscoveredInInterproc;
 
   ReturnedADB(PotAddrDepBeg ADB, DCLevel Lvl, bool DiscoveredInInterproc)
-      : ADB(ADB), Lvl(Lvl), DiscoveredInInterproc(DiscoveredInInterproc) {}
+      : InterprocRetAddrDep(ADB, IRADBKind_Returned), Lvl(Lvl),
+        DiscoveredInInterproc(DiscoveredInInterproc) {}
+
+  static bool classof(const InterprocRetAddrDep *IRADB) {
+    return IRADB->getKind() == IRADBKind_Returned;
+  }
 };
 
-using InterprocBFSRes = list<ReturnedADB>;
+struct OverwrittenADB : InterprocRetAddrDep {
+  OverwrittenADB(PotAddrDepBeg ADB)
+      : InterprocRetAddrDep(ADB, IRADBKind_Overwritten) {}
+
+  static bool classof(const InterprocRetAddrDep *IRADB) {
+    return IRADB->getKind() == IRADBKind_Overwritten;
+  }
+};
+
+// FIXME: Make this a unique_ptr. Requires at least a custom copy constructor
+// for BFSCtx (Rule of X).
+using InterprocBFSRes = list<shared_ptr<InterprocRetAddrDep>>;
 
 //===----------------------------------------------------------------------===//
 // The BFS Context Hierarchy
@@ -580,8 +611,8 @@ public:
   CtxKind getKind() const { return Kind; }
 
   BFSCtx(BasicBlock *BB, CtxKind CK)
-      : BB(BB), ADBs(), CallPath(new CallPathStack()),
-        InheritedADBs(), ReturnedADBs{}, Kind(CK){};
+      : BB(BB), ADBs(), CallPath(new CallPathStack()), InheritedADBs(),
+        ADBsToBeReturned(), Kind(CK){};
 
   virtual ~BFSCtx() {
     if (!CallPath->empty())
@@ -1028,7 +1059,7 @@ protected:
 
   // IDs of the ADBs which ran into this function. Union of all levels of
   // recursios.
-  InterprocBFSRes ReturnedADBs;
+  InterprocBFSRes ADBsToBeReturned;
 
   /// Prepares a newly created BFSCtx for interprocedural analysis.
   ///
@@ -1398,7 +1429,6 @@ void PotAddrDepBeg::addToDCUnion(BasicBlock *BB, DCLink DCL) {
   DCM[BB].insert(DCL);
 }
 
-// FIXME: Template via level?
 void PotAddrDepBeg::tryAddValueToDepChains(Instruction &I, DCLink DCLAdd,
                                            DCLink DCLCmp) {
   // FIXME: How can this check be made redundant?
@@ -1574,12 +1604,12 @@ InterprocBFSRes BFSCtx::runInterprocBFS(BasicBlock *FirstBB, CallBase *CallB) {
   if (auto *AC = dyn_cast<AnnotCtx>(this)) {
     AnnotCtx InterprocCtx = AnnotCtx(*AC, FirstBB, CallB);
     InterprocCtx.runBFS();
-    return InterprocBFSRes(move(InterprocCtx.ReturnedADBs));
+    return InterprocBFSRes(move(InterprocCtx.ADBsToBeReturned));
   }
   if (auto *VC = dyn_cast<VerCtx>(this)) {
     VerCtx InterprocCtx = VerCtx(*VC, FirstBB, CallB);
     InterprocCtx.runBFS();
-    return InterprocBFSRes(move(InterprocCtx.ReturnedADBs));
+    return InterprocBFSRes(move(InterprocCtx.ADBsToBeReturned));
   }
   llvm_unreachable("Called runInterprocBFS() with no BFSCtx child.");
 }
@@ -1740,47 +1770,64 @@ void BFSCtx::handleCall(CallBase &CallB) {
 
   auto *VAdd = cast<Value>(&CallB);
 
-  // Handle returned addr deps.
-  // FIXME: unneccessary iterations here as RADBsFromCall and ADBs probably
-  // share a lot of PotAddrDepBeg's.
-  for (auto &RADB : RADBsFromCall) {
-    auto ID = RADB.ADB.getID();
-    auto &Lvl = RADB.Lvl;
+  // FIXME: Make this more readable
+  for (auto &IRetAD : RADBsFromCall) {
+    auto ID = IRetAD->ADB.getID();
 
-    // This ensuers that either the returned ADB exists in the current context's
-    // ADBs or we continue.
-    if (RADB.DiscoveredInInterproc) {
-      if (Lvl != DCLevel::PLCHLDR) {
-        ADBs.emplace(ID, move(RADB.ADB));
-        ADBs.at(ID).resetDCM(BB);
-      } else {
-        if (auto *VC = dyn_cast<VerCtx>(this))
-          VC->addToOutsideIDs(RADB.ADB.getID());
-        continue;
+    if (auto *OvwrADB = dyn_cast<OverwrittenADB>(IRetAD.get())) {
+      assert(ADBs.find(ID) != ADBs.end() &&
+             "Overwritten ADB not present in calling function!");
+
+      ADBs.erase(ID);
+
+      if (InheritedADBs.find(ID) != InheritedADBs.end())
+        ADBsToBeReturned.push_back(move(IRetAD));
+    } else if (auto *RADB = dyn_cast<ReturnedADB>(IRetAD.get())) {
+      auto &Lvl = RADB->Lvl;
+
+      // This ensuers that either the returned ADB exists in the current
+      // context's ADBs or that we continue otherwise.
+      if (RADB->DiscoveredInInterproc) {
+        // Check for the case where a dep chain got returend
+        if (Lvl != DCLevel::NORET) {
+          ADBs.emplace(ID, move(RADB->ADB));
+          ADBs.at(ID).resetDCM(BB);
+        } else {
+          // A dep chain didn't get returned. We start tracking the ADB
+          // if we are verifying and continue.
+          if (auto *VC = dyn_cast<VerCtx>(this)) {
+            VC->addToOutsideIDs(RADB->ADB.getID());
+            ADBsToBeReturned.push_back(move(IRetAD));
+          }
+          continue;
+        }
       }
-    }
 
-    auto &ADB = ADBs.at(ID);
+      assert(ADBs.find(ID) != ADBs.end() &&
+             "ADB not found after returning from function!");
 
-    if (!RADB.DiscoveredInInterproc)
-      ADB.addStepToPathFrom(&CallB);
+      auto &ADB = ADBs.at(ID);
 
-    ADB.addStepToPathFrom(&CallB, true);
+      if (!RADB->DiscoveredInInterproc)
+        ADB.addStepToPathFrom(&CallB);
 
-    // FIXME: Can this be made nicer?
-    switch (Lvl) {
-    case DCLevel::PTR:
-      ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTR});
-      break;
-    case DCLevel::PTE:
-      ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTE});
-      break;
-    case DCLevel::BOTH:
-      ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTR});
-      ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTE});
-      break;
-    default:
-      break;
+      ADB.addStepToPathFrom(&CallB, true);
+
+      // FIXME: Can this be made nicer?
+      switch (Lvl) {
+      case DCLevel::PTR:
+        ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTR});
+        break;
+      case DCLevel::PTE:
+        ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTE});
+        break;
+      case DCLevel::BOTH:
+        ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTR});
+        ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTE});
+        break;
+      default:
+        break;
+      }
     }
   }
 }
@@ -1852,27 +1899,48 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
     if (auto *MDAnnotation = StoreI.getMetadata("annotation"))
       VC->handleDepAnnotations(&StoreI, MDAnnotation);
 
-  auto DCLCmp = DCLink(StoreI.getValueOperand(), DCLevel::BOTH);
+  // DCLCmp can only run at PTR level as we could otherwise prodcue a 2nd-degree
+  // PTE-level value
+  auto DCLCmp = DCLink(StoreI.getValueOperand(), DCLevel::PTR);
   auto DCLEnd = DCLink(StoreI.getPointerOperand(), DCLevel::PTR);
   auto DCLAdd = DCLink(StoreI.getPointerOperand(), DCLevel::PTE);
 
-  for (auto &ADBP : ADBs) {
-    auto &ADB = ADBP.second;
+  for (auto ADBPIt = ADBs.begin(); ADBPIt != ADBs.end();) {
+    auto &ID = ADBPIt->first;
+    auto &ADB = ADBPIt->second;
 
     // We check for the case here where we have somethign like
-    // *dep_chain_ptr = non_dep_chain_value;
-    // In thatLoadI case, we must remove 'dep_chain_ptr' from the dep chain.
-    if (storeOverwritesDCValue(StoreI, ADB))
-      ADB.removeLinkFromDCs(BB, DCLAdd);
-    else
-      depChainThroughInst(StoreI, DCLAdd, SmallVector<DCLink>{DCLCmp});
+    // *ptr_to_dep_chain_value = non_dep_chain_value;
+    //
+    // ========== ♫ Throoooow awaaaay your dependency chaaaa-aain ♫ ==========
+    //
+    // We make a deliberate overstimation here in the favour of preventing false
+    // positives. If we see any PTE-level dep chain value being overwritten, we
+    // either throw away the full dependency chain or consider it preserved.
+    // This is a result of us not being able to tell which value is being
+    // overwritten and to what other values the pointer to the PTE-level value
+    // in question aliases.
+    if (StoreI.isVolatile()) {
+      if (isa<AnnotCtx>(this) && ADB.belongsToDepChain(BB, DCLEnd))
+        ADB.addAddrDep(getInstLocString(&StoreI), getFullPath(&StoreI, true),
+                       &StoreI);
+    } else if (storeOverwritesDCValue(StoreI, ADB)) {
+      // If this dep chain runs interprocedurally, we need to make the calling
+      // function aware of the overwrite
+      if (InheritedADBs.find(ID) != InheritedADBs.end())
+        ADBsToBeReturned.push_back(make_shared<OverwrittenADB>(ADB));
 
-    // FIXME: dubplicate code
-    if (StoreI.isVolatile())
-      if (isa<AnnotCtx>(this))
-        if (ADB.belongsToDepChain(BB, DCLEnd))
-          ADB.addAddrDep(getInstLocString(&StoreI), getFullPath(&StoreI, true),
-                         &StoreI);
+      if (isa<AnnotCtx>(this)) {
+        ++ADBPIt;
+        ADBs.erase(ID);
+      } else if (auto *VC = dyn_cast<VerCtx>(this))
+        VC->markIDAsVerified(ID);
+      continue;
+    }
+
+    ADB.tryAddValueToDepChains(StoreI, DCLAdd, DCLCmp);
+
+    ++ADBPIt;
   }
 }
 
@@ -1964,20 +2032,22 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
     auto &ID = ADBP.first;
     auto &ADB = ADBP.second;
 
+    bool ADBDiscoverdInThisF = InheritedADBs.find(ID) == InheritedADBs.end();
+
+    auto RADB =
+        make_shared<ReturnedADB>(ADB, DCLevel::NORET, ADBDiscoverdInThisF);
+
     auto RetAtPTR = ADB.belongsToDepChain(BB, RetLinkPTR);
     auto RetAtPTE = ADB.belongsToDepChain(BB, RetLinkPTE);
-    // FIXME: if an ADB is new and gets returned, it is copied twice.
-    ReturnedADB RADB = {move(ADB), DCLevel::PLCHLDR,
-                        InheritedADBs.find(ID) == InheritedADBs.end()};
 
     if (RetAtPTR && RetAtPTE)
-      RADB.Lvl = DCLevel::BOTH;
+      RADB->Lvl = DCLevel::BOTH;
     else if (RetAtPTR)
-      RADB.Lvl = DCLevel::PTR;
+      RADB->Lvl = DCLevel::PTR;
     else if (RetAtPTE)
-      RADB.Lvl = DCLevel::PTE;
+      RADB->Lvl = DCLevel::PTE;
 
-    ReturnedADBs.emplace_back(RADB);
+    ADBsToBeReturned.push_back(move(RADB));
   }
 }
 
