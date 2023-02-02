@@ -1883,31 +1883,31 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
 }
 
 void BFSCtx::visitAtomicCmpXchgInst(AtomicCmpXchgInst &ACXI) {
-  // Here we have a conditional branch within the same basic block as an
-  // ACXI can be rewritten to:
-  //
-  // if (eq == *ptr) {
-  //   *ptr = store;
-  // }
-  //
-  // Therefore any overwrites of dep chain values are conditonal.  Resolve
-  // this by all old and new dep chain values and mark
-  // cannotBeFullDependencyAnymore if something new gets added to the dep
-  // chain as it will always be conditional from the view of static
-  // analysis.
+  // // Here we have a conditional branch within the same basic block as an
+  // // ACXI can be rewritten to:
+  // //
+  // // if (eq == *ptr) {
+  // //   *ptr = store;
+  // // }
+  // //
+  // // Therefore any overwrites of dep chain values are conditonal.  Resolve
+  // // this by all old and new dep chain values and mark
+  // // cannotBeFullDependencyAnymore if something new gets added to the dep
+  // // chain as it will always be conditional from the view of static
+  // // analysis.
 
-  auto DCLCmp = DCLink(ACXI.getPointerOperand(), DCLevel::PTE);
-  auto DCLEq = DCLink(ACXI.getCompareOperand(), DCLevel::BOTH);
-  auto DCLStore = DCLink(ACXI.getNewValOperand(), DCLevel::BOTH);
+  // auto DCLCmp = DCLink(ACXI.getPointerOperand(), DCLevel::PTE);
+  // auto DCLEq = DCLink(ACXI.getCompareOperand(), DCLevel::BOTH);
+  // auto DCLStore = DCLink(ACXI.getNewValOperand(), DCLevel::BOTH);
 
-  depChainThroughInst(ACXI, DCLCmp, SmallVector<DCLink>{DCLStore});
+  // depChainThroughInst(ACXI, DCLCmp, SmallVector<DCLink>{DCLStore});
 }
 
 void BFSCtx::visitAtomicRMWInst(AtomicRMWInst &AtomicRMWI) {
-  auto DCLCmp = DCLink(AtomicRMWI.getValOperand(), DCLevel::PTR);
-  auto DCLAdd = DCLink(AtomicRMWI.getPointerOperand(), DCLevel::PTE);
+  // auto DCLCmp = DCLink(AtomicRMWI.getValOperand(), DCLevel::PTR);
+  // auto DCLAdd = DCLink(AtomicRMWI.getPointerOperand(), DCLevel::PTE);
 
-  depChainThroughInst(AtomicRMWI, DCLAdd, SmallVector<DCLink>{DCLCmp});
+  // depChainThroughInst(AtomicRMWI, DCLAdd, SmallVector<DCLink>{DCLCmp});
 }
 
 void BFSCtx::visitGetElementPtrInst(GetElementPtrInst &GEP) {
