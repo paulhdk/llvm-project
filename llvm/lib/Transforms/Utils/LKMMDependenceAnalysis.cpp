@@ -1049,10 +1049,10 @@ protected:
   /// \param ADB the PotAddrDepBeg in question.
   /// \param CallI the call instruction whose arguments should be checked
   ///  against \p ADB's dep chains.
-  /// \param DepArgsDCUnion the set which will contain all dependent function
-  ///  arguments on return.
+  /// \param DepArgsDCUnion the set which will contain pairs of all indices of
+  ///  dependent function arguments together with the level at which they run.
   void findDependentArgs(PotAddrDepBeg &ADB, CallBase *CallB,
-                         DepChain *DepArgsDCUnion);
+                         SmallVectorImpl<pair<int, DCLevel>> *DepArgsDCUnion);
 
   /// Returns the current limit for interprocedural annotation / verification
   ///
@@ -1179,7 +1179,7 @@ protected:
   bool storeOverwritesDCValue(StoreInst &StoreI, PotAddrDepBeg &ADB);
 
 private:
-  void addToInheritedADBs(string ID) { InheritedADBs.insert(ID); }
+  void addToInheritedADBs(string ID) { InheritedADBs.emplace(ID); }
 
   const CtxKind Kind;
 };
@@ -1194,7 +1194,7 @@ public:
   // FIXME Nearly identical to VerCtx's copy constructor. Can we template
   // this?
   AnnotCtx(AnnotCtx &AC, BasicBlock *FirstBB, CallBase *CallB) : AnnotCtx(AC) {
-    ReturnedADBs.clear();
+    ADBsToBeReturned.clear();
 
     prepareInterproc(CallB, FirstBB);
 
@@ -1227,7 +1227,7 @@ public:
   // FIXME Nearly identical to AnnotCtx's copy constructor. Can we template
   // this?
   VerCtx(VerCtx &VC, BasicBlock *FirstBB, CallBase *CallB) : VerCtx(VC) {
-    ReturnedADBs.clear();
+    ADBsToBeReturned.clear();
 
     prepareInterproc(CallB, FirstBB);
 
@@ -1520,22 +1520,23 @@ void BFSCtx::deleteAddrDepDCsAt(BasicBlock *BB,
 }
 
 void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
-  DepChain DepArgs;
+  SmallVector<pair<int, DCLevel>, 12> DepArgIndices;
+  Function *CalledF = CallB->getCalledFunction();
 
   for (auto It = ADBs.begin(); It != ADBs.end();) {
     auto &ID = It->first;
     auto &ADB = It->second;
 
-    findDependentArgs(ADB, CallB, &DepArgs);
+    findDependentArgs(ADB, CallB, &DepArgIndices);
 
-    if (!DepArgs.empty()) {
+    if (!DepArgIndices.empty()) {
       if (FirstBB) {
         ADB.addStepToPathFrom(CallB);
 
         ADB.resetDCM(FirstBB);
 
-        for (auto DA : DepArgs)
-          ADB.addToDCUnion(FirstBB, move(DA));
+        for (auto &[Ind, Lvl] : DepArgIndices)
+          ADB.addToDCUnion(FirstBB, DCLink(CalledF->getArg(Ind), Lvl));
 
         addToInheritedADBs(ID);
       } else if (auto *VC = dyn_cast<VerCtx>(this)) {
@@ -1556,7 +1557,7 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
       ADBs.erase(Del);
     }
 
-    DepArgs.clear();
+    DepArgIndices.clear();
   }
 }
 
@@ -1592,37 +1593,23 @@ constexpr unsigned BFSCtx::currentLimit() const {
 }
 
 void BFSCtx::findDependentArgs(PotAddrDepBeg &ADB, CallBase *CallB,
-                               DepChain *DepArgs) {
+                               SmallVectorImpl<pair<int, DCLevel>> *DepArgs) {
   auto *CalledF = CallB->getCalledFunction();
 
   for (unsigned Ind = 0; Ind < CallB->arg_size(); ++Ind) {
     auto *VCmp = CallB->getArgOperand(Ind);
 
     // FIXME: Can this be made nicer?
-    if (ADB.belongsToDepChain(BB, DCLink(VCmp, DCLevel::PTR))) {
-      if (CalledF) {
-        if (!CalledF->isVarArg()) {
-          DepArgs->insert(DCLink{CalledF->getArg(Ind), DCLevel::PTR});
-          continue;
-        }
-      }
-
-      // CalledF is null or CalledF is variadic
-      DepArgs->insert(DCLink{VCmp, DCLevel::PTR});
-    }
+    if (ADB.belongsToDepChain(BB, DCLink(VCmp, DCLevel::PTR)))
+      if (CalledF)
+        if (!CalledF->isVarArg())
+          DepArgs->emplace_back(Ind, DCLevel::PTR);
 
     // FIXME: Basically duplicate
-    if (ADB.belongsToDepChain(BB, DCLink(VCmp, DCLevel::PTE))) {
-      if (CalledF) {
-        if (!CalledF->isVarArg()) {
-          DepArgs->insert(DCLink{CalledF->getArg(Ind), DCLevel::PTE});
-          continue;
-        }
-      }
-
-      // CalledF is null or CalledF is variadic
-      DepArgs->insert(DCLink{VCmp, DCLevel::PTE});
-    }
+    if (ADB.belongsToDepChain(BB, DCLink(VCmp, DCLevel::PTE)))
+      if (CalledF)
+        if (!CalledF->isVarArg())
+          DepArgs->emplace_back(Ind, DCLevel::PTE);
   }
 }
 
