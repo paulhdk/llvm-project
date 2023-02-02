@@ -97,11 +97,18 @@ template <typename T> using DepHalfMap = unordered_map<string, T>;
 /// Every dep chain link has a DCLevel. The level tracks whether the pointer
 /// itself or the pointed-to value, the pointee, is part of the dependency
 /// chain.
-/// PTR -> we're interested in the pointer itself.
-/// PTE -> we're interested in the pointed-to value.
-/// BOTH -> matches PTR __AND__ PTE.
-/// PLCHLDR -> used as dummy value.
-enum class DCLevel { PTR, PTE, BOTH, PLCHLDR };
+///
+/// PTR   -> we're interested in the pointer itself.  PTE -> we're
+/// interested in the pointed-to value.
+///
+/// BOTH  -> matches PTR __AND__ PTE.
+///
+/// NORET -> Dep chain doesn't get returned, but calling function should still
+/// be made aware of its existence. The calling function then knows that the
+/// beginning has been seen, but its dependency chain might have been broken.
+///
+/// EMPTY -> Empty.
+enum class DCLevel { PTR, PTE, BOTH, NORET, EMPTY };
 
 /// Represents a dependency chain link. A dep chain link consists of an IR
 /// value and the corresponding dep chain level.
@@ -117,11 +124,11 @@ struct DCLink {
 
 template <> struct DenseMapInfo<DCLink> {
   static inline DCLink getEmptyKey() {
-    return DCLink(DenseMapInfo<Value *>::getEmptyKey(), DCLevel::BOTH);
+    return DCLink(DenseMapInfo<Value *>::getEmptyKey(), DCLevel::EMPTY);
   }
 
   static inline DCLink getTombstoneKey() {
-    return DCLink(DenseMapInfo<Value *>::getTombstoneKey(), DCLevel::BOTH);
+    return DCLink(DenseMapInfo<Value *>::getTombstoneKey(), DCLevel::EMPTY);
   }
 
   static unsigned getHashValue(const DCLink &Link) {
