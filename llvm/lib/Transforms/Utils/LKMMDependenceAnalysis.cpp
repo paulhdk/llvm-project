@@ -1125,7 +1125,7 @@ protected:
   ///
   /// \returns a vector of strings, representing the individual components of
   ///  the annotation string. (ID, type ...)
-  void parseDepHalfString(StringRef Annot, SmallVector<string, 5> &AnnotData);
+  void parseDepHalfString(StringRef Annot, SmallVectorImpl<string> &AnnotData);
 
   /// Populates a map of BBs to a set of BBs, representing the back edge
   /// destinations.
@@ -1626,7 +1626,7 @@ bool BFSCtx::bfsCanVisit(BasicBlock *SBB,
 }
 
 void BFSCtx::parseDepHalfString(StringRef Annot,
-                                SmallVector<string, 5> &AnnotData) {
+                                SmallVectorImpl<string> &AnnotData) {
   if (!Annot.consume_back(";"))
     return;
 
@@ -2074,8 +2074,8 @@ bool VerCtx::isADBBroken(string const &ID, Instruction *I,
   // Such cases would then be false positivies.
   if (PartOfADBs || PartOfOutsideIDs) {
     // We have to account for the fact that annotations might get removed for
-    // example and therefore we might not have seen the corresponding beginning
-    // annotation.
+    // example and therefore we might not have seen the corresponding
+    // beginning annotation.
     if (BrokenADBs->find(ID) == BrokenADBs->end())
       return false;
 
@@ -2220,9 +2220,9 @@ private:
   unordered_set<Module *> PrintedModules;
 
   /// Maps the reduced IDs of the same beginning / ending to the shortest
-  /// VerAddDepBeg with that ending plus the length of its ID.  An ID is reduced
-  /// if it excludes the path from the beginning to the end and only contains
-  /// the beginning location and the ending location.
+  /// VerAddDepBeg with that ending plus the length of its ID.  An ID is
+  /// reduced if it excludes the path from the beginning to the end and only
+  /// contains the beginning location and the ending location.
   StringMap<pair<VerAddrDepBeg *, unsigned>> MinLengthPerBegEndPair;
 
   /// Prints broken dependencies.
