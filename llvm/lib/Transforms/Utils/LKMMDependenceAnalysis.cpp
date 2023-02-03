@@ -1559,6 +1559,7 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
 
     findDependentArgs(ADB, CallB, &DepArgIndices);
 
+    // FIXME: Make this nicer
     if (!DepArgIndices.empty()) {
       if (FirstBB) {
         ADB.addStepToPathFrom(CallB);
@@ -1569,12 +1570,17 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
           ADB.addToDCUnion(FirstBB, DCLink(CalledF->getArg(Ind), Lvl));
 
         addToInheritedADBs(ID);
+        ++It;
       } else if (auto *VC = dyn_cast<VerCtx>(this)) {
         // Mark dependencies through external or empty functions as trivially
         // verified in VerCtx
         VC->markIDAsVerified(ID);
+        ++It;
+      } else {
+        ADBsToBeReturned.push_back(make_shared<OverwrittenADB>(ADB));
+        auto Del = It++;
+        ADBs.erase(Del);
       }
-      ++It;
     } else {
       // FIXME: Are we using outsideIDs?
       // If we don't have any dependent arguments, we can remove the ADB
@@ -2160,6 +2166,23 @@ bool VerCtx::isADBBroken(string const &ID, Instruction *I,
 
         if (auto *DCU = ADB.getDCsAt(BB))
           DC = *DCU;
+
+        if (ADB.getID().find(
+                "_compound_head::251:23\ntry_memory_failure_hugetlb::1888:9<-_"
+                "compound_head()\ntry_memory_failure_hugetlb::1889:2->lock_"
+                "page()\ntry_memory_failure_hugetlb::1889:2<-lock_page()\ntry_"
+                "memory_failure_hugetlb::1918:7->hwpoison_user_mappings()"
+                "\nhwpoison_user_mappings::1417:24->_compound_head()\nhwpoison_"
+                "user_mappings::1417:24<-_compound_head()\nhwpoison_user_"
+                "mappings::1423:17->PageMlocked()\nhwpoison_user_mappings::"
+                "1423:17<-PageMlocked()\nhwpoison_user_mappings::1431:8->"
+                "PageLRU()\nhwpoison_user_mappings::1431:8<-PageLRU()"
+                "\nhwpoison_user_mappings::1438:7->page_mapped()\npage_mapped::"
+                "944:6->PageCompound()\nPageCompound::295:9->generic_test_bit()"
+                "\nPageCompound::295:9<-generic_test_bit()\nPageCompound::295:"
+                "9->const_test_bit()\nPageCompound::295:9<-const_test_bit()"
+                "\nPageCompound::296:9") != string::npos)
+          ADB.printDepChainAt(BB);
 
         addBrokenEnding(VADB,
                         VerAddrDepEnd(I, ID, getFullPath(I),
