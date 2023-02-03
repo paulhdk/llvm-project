@@ -1984,15 +1984,14 @@ void BFSCtx::visitGetElementPtrInst(GetElementPtrInst &GEP) {
   // new pointers from dep chain links at pointee level as this falls into
   // the area of pointer aliasing.
   auto DCLAdd = DCLink(&GEP, DCLevel::PTR);
+  SmallVector<DCLink, 6> DCLCmps = {};
 
-  for (unsigned Ind = 1; Ind < GEP.getNumOperands(); ++Ind) {
-    auto DCLCmp = DCLink(GEP.getOperand(Ind), DCLevel::PTR);
+  DCLCmps.emplace_back(GEP.getPointerOperand(), DCLevel::PTR);
 
-    depChainThroughInst(GEP, DCLAdd, SmallVector<DCLink>{DCLCmp});
-  }
+  for (unsigned Ind = 1; Ind < GEP.getNumOperands(); ++Ind)
+    DCLCmps.emplace_back(GEP.getOperand(Ind), DCLevel::PTR);
 
-  auto DCLCmp = DCLink(GEP.getPointerOperand(), DCLevel::PTR);
-  depChainThroughInst(GEP, DCLAdd, SmallVector<DCLink>{DCLCmp});
+  depChainThroughInst(GEP, DCLAdd, DCLCmps);
 }
 
 void BFSCtx::visitPHINode(PHINode &PhiI) {
