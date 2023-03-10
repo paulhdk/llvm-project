@@ -1930,7 +1930,9 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
       if (isa<AnnotCtx>(this) && ADB.belongsToDepChain(BB, DCLEnd))
         ADB.addAddrDep(getInstLocString(&StoreI), getFullPath(&StoreI, true),
                        &StoreI);
-    } else if (storeOverwritesDCValue(StoreI, ADB)) {
+    }
+
+    if (storeOverwritesDCValue(StoreI, ADB)) {
       // If this dep chain runs interprocedurally, we need to make the calling
       // function aware of the overwrite
       if (InheritedADBs.find(ID) != InheritedADBs.end())
@@ -2165,23 +2167,6 @@ bool VerCtx::isADBBroken(string const &ID, Instruction *I,
 
         if (auto *DCU = ADB.getDCsAt(BB))
           DC = *DCU;
-
-        if (ADB.getID().find(
-                "_compound_head::251:23\ntry_memory_failure_hugetlb::1888:9<-_"
-                "compound_head()\ntry_memory_failure_hugetlb::1889:2->lock_"
-                "page()\ntry_memory_failure_hugetlb::1889:2<-lock_page()\ntry_"
-                "memory_failure_hugetlb::1918:7->hwpoison_user_mappings()"
-                "\nhwpoison_user_mappings::1417:24->_compound_head()\nhwpoison_"
-                "user_mappings::1417:24<-_compound_head()\nhwpoison_user_"
-                "mappings::1423:17->PageMlocked()\nhwpoison_user_mappings::"
-                "1423:17<-PageMlocked()\nhwpoison_user_mappings::1431:8->"
-                "PageLRU()\nhwpoison_user_mappings::1431:8<-PageLRU()"
-                "\nhwpoison_user_mappings::1438:7->page_mapped()\npage_mapped::"
-                "944:6->PageCompound()\nPageCompound::295:9->generic_test_bit()"
-                "\nPageCompound::295:9<-generic_test_bit()\nPageCompound::295:"
-                "9->const_test_bit()\nPageCompound::295:9<-const_test_bit()"
-                "\nPageCompound::296:9") != string::npos)
-          ADB.printDepChainAt(BB);
 
         addBrokenEnding(VADB,
                         VerAddrDepEnd(I, ID, getFullPath(I),
