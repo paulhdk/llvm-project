@@ -1751,6 +1751,15 @@ void BFSCtx::handleCall(CallBase &CallB) {
   // positives here. Similarly for calls to intrinsics or indirect calls.
   BasicBlock *FirstBB;
 
+  // Here, we operate under the assumption that void intrinsics will not
+  // overwrite any function arguments passed to them. They therefore do not hold
+  // the potential to break dep chains and can be safely skipped. Per our
+  // assumption, the same does not apply to non-void intrinsics, simply for the
+  // reason that they might return a dep chain value which the analysis cannot
+  // cach. They are therefore treated like external functions (see below).
+  if (isa<IntrinsicInst>(CallB) && CallB.getType()->isVoidTy())
+    return;
+
   // FIXME: CallI.isIndirectCall() == !CalledF ?
   if (!CalledF || CalledF->hasExternalLinkage() || CalledF->isIntrinsic() ||
       CalledF->isVarArg() || CalledF->empty() || CallB.isIndirectCall())
