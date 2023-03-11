@@ -1853,7 +1853,6 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
     if (auto *MDAnnotation = LoadI.getMetadata("annotation"))
       VC->handleDepAnnotations(&LoadI, MDAnnotation);
 
-  // Handle dep chains through this load instruction
   auto DCLCmp = DCLink(LoadI.getPointerOperand(), DCLevel::BOTH);
   auto DCLEnd = DCLink(LoadI.getPointerOperand(), DCLevel::PTR);
   auto DCLAdd = DCLink(&LoadI, DCLevel::PTR);
@@ -1889,18 +1888,20 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
     // A dep chain always starts at the level POINTER
     DC.insert(DCLink{LoadVal, DCLevel::PTR});
 
-    ADBs.emplace(ID, PotAddrDepBeg(&LoadI, ID, getFullPath(&LoadI, true),
-                                   move(DC), LoadI.getParent()));
+    if (!ADBs.emplace(ID, PotAddrDepBeg(&LoadI, ID, getFullPath(&LoadI, true),
+                                        move(DC), LoadI.getParent()))
+             .second)
+      errs() << "Couldn't insert new PotAddrDepBeg";
   }
 }
 
 bool BFSCtx::storeOverwritesDCValue(StoreInst &StoreI, PotAddrDepBeg &ADB) {
   auto StoreSrcPTE = DCLink(StoreI.getValueOperand(), DCLevel::PTE);
   auto StoreSrcPTR = DCLink(StoreI.getValueOperand(), DCLevel::PTR);
-  auto StoreDst = DCLink(StoreI.getPointerOperand(), DCLevel::PTE);
+  auto StoreDstPTE = DCLink(StoreI.getPointerOperand(), DCLevel::PTE);
 
   // Overwrites iff we store non-dc value to a pointee value in a dep chain
-  if (ADB.belongsToDepChain(StoreI.getParent(), StoreDst) &&
+  if (ADB.belongsToDepChain(StoreI.getParent(), StoreDstPTE) &&
       (!ADB.belongsToDepChain(StoreI.getParent(), StoreSrcPTR) &&
        !ADB.belongsToDepChain(StoreI.getParent(), StoreSrcPTE)))
     return true;
@@ -1914,8 +1915,8 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
     if (auto *MDAnnotation = StoreI.getMetadata("annotation"))
       VC->handleDepAnnotations(&StoreI, MDAnnotation);
 
-  // DCLCmp can only run at PTR level as we could otherwise prodcue a 2nd-degree
-  // PTE-level value
+  // DCLCmp can only run at PTR level as we could otherwise prodcue a
+  // 2nd-degree PTE-level value
   auto DCLCmp = DCLink(StoreI.getValueOperand(), DCLevel::PTR);
   auto DCLEnd = DCLink(StoreI.getPointerOperand(), DCLevel::PTR);
   auto DCLAdd = DCLink(StoreI.getPointerOperand(), DCLevel::PTE);
@@ -1924,26 +1925,27 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
     auto &ID = ADBPIt->first;
     auto &ADB = ADBPIt->second;
 
-    // We check for the case here where we have somethign like
-    // *ptr_to_dep_chain_value = non_dep_chain_value;
-    //
-    // ========== ♫ Throoooow awaaaay your dependency chaaaa-aain ♫ ==========
-    //
-    // We make a deliberate overstimation here in the favour of preventing false
-    // positives. If we see any PTE-level dep chain value being overwritten, we
-    // either throw away the full dependency chain or consider it preserved.
-    // This is a result of us not being able to tell which value is being
-    // overwritten and to what other values the pointer to the PTE-level value
-    // in question aliases.
     if (StoreI.isVolatile()) {
       if (isa<AnnotCtx>(this) && ADB.belongsToDepChain(BB, DCLEnd))
         ADB.addAddrDep(getInstLocString(&StoreI), getFullPath(&StoreI, true),
                        &StoreI);
     }
 
+    // We check for the case here where we have somethign like
+    // *ptr_to_dep_chain_value = non_dep_chain_value;
+    //
+    // ========== ♫ Throoooow awaaaay your dependency chaaaa-aain ♫
+    // ==========
+    //
+    // We make a deliberate overstimation here in the favour of preventing
+    // false positives. If we see any PTE-level dep chain value being
+    // overwritten, we either throw away the full dependency chain or
+    // consider it preserved. This is a result of us not being able to tell
+    // which value is being overwritten and to what other values the pointer
+    // to the PTE-level value in question aliases.
     if (storeOverwritesDCValue(StoreI, ADB)) {
-      // If this dep chain runs interprocedurally, we need to make the calling
-      // function aware of the overwrite
+      // If this dep chain runs interprocedurally, we need to make the
+      // calling function aware of the overwrite
       if (InheritedADBs.find(ID) != InheritedADBs.end())
         ADBsToBeReturned.push_back(make_shared<OverwrittenADB>(ADB));
 
@@ -1969,7 +1971,7 @@ void BFSCtx::visitAtomicCmpXchgInst(AtomicCmpXchgInst &ACXI) {
   // //   *ptr = store;
   // // }
   // //
-  // // Therefore any overwrites of dep chain values are conditonal.  Resolve
+  // // Therefore any overwrites of dep chain values are conditonal. Resolve
   // // this by all old and new dep chain values and mark
   // // cannotBeFullDependencyAnymore if something new gets added to the dep
   // // chain as it will always be conditional from the view of static
@@ -2159,8 +2161,8 @@ bool VerCtx::isADBBroken(string const &ID, Instruction *I,
   // might add endings which aren't actually reachable by the corresponding.
   // Such cases would then be false positivies.
   if (PartOfADBs || PartOfOutsideIDs) {
-    // We have to account for the fact that annotations might get removed for
-    // example and therefore we might not have seen the corresponding
+    // We have to account for the fact that annotations might get removed
+    // for example and therefore we might not have seen the corresponding
     // beginning annotation.
     if (BrokenADBs->find(ID) == BrokenADBs->end())
       return false;
