@@ -40,7 +40,7 @@
 			"command": "./doitlk-debug-get-compile-command-args.py",
 			"args": [
 				"writeArgsToFile",
-				"${input:moduleCompileCommandsPath}"
+				"${input:objectCompileCommandsPath}"
 			],
 			"problemMatcher": [],
 			"dependsOn": [
@@ -65,7 +65,7 @@
 			"description": "CMake Build Target"
 		},
 		{
-			"id": "moduleCompileCommandsPath",
+			"id": "objectCompileCommandsPath",
 			"type": "command",
 			"command": "extension.commandvariable.file.pickFile",
 			"args": {
