@@ -1952,8 +1952,10 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
       if (isa<AnnotCtx>(this)) {
         ++ADBPIt;
         ADBs.erase(ID);
-      } else if (auto *VC = dyn_cast<VerCtx>(this))
+      } else if (auto *VC = dyn_cast<VerCtx>(this)) {
+        ++ADBPIt;
         VC->markIDAsVerified(ID);
+      }
       continue;
     }
 
