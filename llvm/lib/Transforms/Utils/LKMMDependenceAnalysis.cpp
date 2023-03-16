@@ -563,7 +563,7 @@ struct InterprocRetAddrDep {
 
   PotAddrDepBeg ADB;
 
-  InterprocRetAddrDep(PotAddrDepBeg ADB, IRADBKind Kind)
+  InterprocRetAddrDep(PotAddrDepBeg &ADB, IRADBKind Kind)
       : ADB(ADB), Kind(Kind) {}
 
   IRADBKind getKind() const { return Kind; }
@@ -586,7 +586,7 @@ struct ReturnedADB : InterprocRetAddrDep {
 };
 
 struct OverwrittenADB : InterprocRetAddrDep {
-  OverwrittenADB(PotAddrDepBeg ADB)
+  OverwrittenADB(PotAddrDepBeg &ADB)
       : InterprocRetAddrDep(ADB, IRADBKind_Overwritten) {}
 
   static bool classof(const InterprocRetAddrDep *IRADB) {
