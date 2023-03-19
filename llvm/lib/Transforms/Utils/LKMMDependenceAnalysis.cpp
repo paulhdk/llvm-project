@@ -324,7 +324,7 @@ public:
   PotAddrDepBeg(Instruction *I, string ID, string PathToViaFiles, DepChain DC,
                 BasicBlock *BB)
       : DepHalf(I, ID, PathToViaFiles, DK_AddrBeg), DCM{} {
-    DCM.insert(pair{BB, DC});
+    DCM.insert(pair<BasicBlock *, DepChain>{BB, DC});
   }
 
   /// Checks whether a DepChainPair is currently at a given BB.
@@ -453,7 +453,7 @@ public:
     DCM.clear();
 
     if (ToBB)
-      DCM.insert(pair{ToBB, DepChain{}});
+      DCM.insert(pair<BasicBlock *, DepChain>{ToBB, DepChain{}});
   }
 
 private:
@@ -1372,7 +1372,7 @@ void PotAddrDepBeg::progressDCPaths(BasicBlock *BB, BasicBlock *SBB,
     return;
 
   if (!isAt(SBB))
-    DCM.insert(pair{SBB, DepChain{}});
+    DCM.insert(pair<BasicBlock *, DepChain>{SBB, DepChain{}});
 
   auto &SDC = DCM[SBB];
 
@@ -1566,8 +1566,8 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
 
         ADB.resetDCM(FirstBB);
 
-        for (auto &[Ind, Lvl] : DepArgIndices)
-          ADB.addToDCUnion(FirstBB, DCLink(CalledF->getArg(Ind), Lvl));
+        for (auto &P : DepArgIndices)
+          ADB.addToDCUnion(FirstBB, DCLink(CalledF->getArg(P.first), P.second));
 
         addToInheritedADBs(ID);
         ++It;
@@ -2344,12 +2344,15 @@ private:
       // Check ID in ShortestLengthPerBegEndPair
       // FIXME: do I need to account for the increments here?
       if (MinLengthPerBegEndPair.find(RdcdID) == MinLengthPerBegEndPair.end()) {
-        MinLengthPerBegEndPair.insert(pair{RdcdID, pair{&VADB, OgID.length()}});
+        MinLengthPerBegEndPair.insert(
+            pair<string, pair<VerAddrDepBeg *, unsigned>>{
+                RdcdID, pair<VerAddrDepBeg *, unsigned>{&VADB, OgID.length()}});
 
         ++VADBPIt;
       } else if (MinLengthPerBegEndPair[RdcdID].second > OgID.length()) {
         auto OldID = MinLengthPerBegEndPair[RdcdID].first->getID();
-        MinLengthPerBegEndPair[RdcdID] = pair{&VADB, OgID.length()};
+        MinLengthPerBegEndPair[RdcdID] =
+            pair<VerAddrDepBeg *, unsigned>{&VADB, OgID.length()};
 
         BrokenADBs->erase(OldID);
 
