@@ -1793,55 +1793,59 @@ void BFSCtx::handleCall(CallBase &CallB) {
       assert(ADBs.find(ID) != ADBs.end() &&
              "Overwritten ADB not present in calling function!");
 
-      ADBs.erase(ID);
-
-      if (InheritedADBs.find(ID) != InheritedADBs.end())
-        ADBsToBeReturned.push_back(move(IRetAD));
-    } else if (auto *RADB = dyn_cast<ReturnedADB>(IRetAD.get())) {
-      auto &Lvl = RADB->Lvl;
-
-      // This ensuers that either the returned ADB exists in the current
-      // context's ADBs or that we continue otherwise.
-      if (RADB->DiscoveredInInterproc) {
-        // Check for the case where a dep chain got returend
-        if (Lvl != DCLevel::NORET) {
-          ADBs.emplace(ID, move(RADB->ADB));
-          ADBs.at(ID).resetDCM(BB);
-        } else {
-          // A dep chain didn't get returned. We start tracking the ADB
-          // if we are verifying and continue.
-          if (auto *VC = dyn_cast<VerCtx>(this)) {
-            VC->addToOutsideIDs(RADB->ADB.getID());
-            ADBsToBeReturned.push_back(move(IRetAD));
-          }
-          continue;
-        }
-      }
-
-      assert(ADBs.find(ID) != ADBs.end() &&
-             "ADB not found after returning from function!");
-
       auto &ADB = ADBs.at(ID);
 
-      if (!RADB->DiscoveredInInterproc)
-        ADB.addStepToPathFrom(&CallB);
+      ADB.addStepToPathFrom(&CallB);
 
       ADB.addStepToPathFrom(&CallB, true);
 
-      // FIXME: Can this be made nicer?
-      switch (Lvl) {
-      case DCLevel::PTR:
-        ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTR});
-        break;
-      case DCLevel::PTE:
-        ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTE});
-        break;
-      case DCLevel::BOTH:
-        ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTR});
-        ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTE});
-        break;
-      default:
-        break;
+      if (InheritedADBs.find(ID) != InheritedADBs.end())
+        ADBsToBeReturned.push_back(move(IRetAD));
+
+      ADBs.erase(ID);
+    } else if (auto *RADB = dyn_cast<ReturnedADB>(IRetAD.get())) {
+      auto &Lvl = RADB->Lvl;
+      if (Lvl != DCLevel::NORET) {
+        if (RADB->DiscoveredInInterproc ||
+            (ADBs.find(ID) == ADBs.end() &&
+             InheritedADBs.find(ID) != InheritedADBs.end())) {
+          ADBs.emplace(ID, move(RADB->ADB));
+          ADBs.at(ID).resetDCM(BB);
+        }
+
+        assert(ADBs.find(ID) != ADBs.end() &&
+               "returned ADB which wasn't discovered in function call not "
+               "present in calling function's ADBs or InheritedADBs");
+
+        auto &ADB = ADBs.at(ID);
+
+        if (!RADB->DiscoveredInInterproc)
+          ADB.addStepToPathFrom(&CallB);
+
+        ADB.addStepToPathFrom(&CallB, true);
+
+        // FIXME: Can this be made nicer?
+        switch (Lvl) {
+        case DCLevel::PTR:
+          ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTR});
+          break;
+        case DCLevel::PTE:
+          ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTE});
+          break;
+        case DCLevel::BOTH:
+          ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTR});
+          ADB.addToDCUnion(BB, DCLink{VAdd, DCLevel::PTE});
+          break;
+        default:
+          break;
+        }
+      } else {
+        // A dep chain didn't get returned. We start tracking the ADB
+        // if we are verifying and continue.
+        if (auto *VC = dyn_cast<VerCtx>(this)) {
+          VC->addToOutsideIDs(RADB->ADB.getID());
+          ADBsToBeReturned.push_back(move(IRetAD));
+        }
       }
     }
   }
