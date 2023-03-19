@@ -2064,12 +2064,18 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
     auto RetAtPTR = ADB.belongsToDepChain(BB, RetLinkPTR);
     auto RetAtPTE = ADB.belongsToDepChain(BB, RetLinkPTE);
 
+    // Set the appropriate level at which an ADB is being returned. If the dep
+    // chain does not run into the return value and the ADB was not discovered
+    // as part of the current interprocedural analysis, the calling function
+    // must be aware of its existence and it must not be returned at all.
     if (RetAtPTR && RetAtPTE)
       RADB->Lvl = DCLevel::BOTH;
     else if (RetAtPTR)
       RADB->Lvl = DCLevel::PTR;
     else if (RetAtPTE)
       RADB->Lvl = DCLevel::PTE;
+    else if (!ADBDiscoverdInThisF)
+      return;
 
     ADBsToBeReturned.push_back(move(RADB));
   }
