@@ -1756,16 +1756,24 @@ void BFSCtx::handleCall(CallBase &CallB) {
   // the potential to break dep chains and can be safely skipped. Per our
   // assumption, the same does not apply to non-void intrinsics, simply for the
   // reason that they might return a dep chain value which the analysis cannot
-  // cach. They are therefore treated like external functions (see below).
-  if (isa<IntrinsicInst>(CallB) && CallB.getType()->isVoidTy())
-    return;
+  // cach. They are therefore treated like external functions (see below) unless
+  // their function attribute denote that they only read from memory (or don't
+  // access memory at all).
 
   // FIXME: CallI.isIndirectCall() == !CalledF ?
-  if (!CalledF || CalledF->hasExternalLinkage() || CalledF->isIntrinsic() ||
-      CalledF->isVarArg() || CalledF->empty() || CallB.isIndirectCall())
+  if (!CalledF) {
     FirstBB = nullptr;
-  else
+  } else if (CalledF->hasExternalLinkage() || CalledF->isIntrinsic() ||
+             CalledF->isVarArg() || CalledF->empty() ||
+             CallB.isIndirectCall()) {
+    if (CalledF->onlyReadsMemory() ||
+        (isa<IntrinsicInst>(CallB) && CalledF->getReturnType()->isVoidTy())) {
+      return;
+    }
+    FirstBB = nullptr;
+  } else {
     FirstBB = &*CalledF->begin();
+  }
 
   InterprocBFSRes Res;
 
