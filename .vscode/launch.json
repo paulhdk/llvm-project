@@ -6,7 +6,7 @@
             "preRunCommands": [
                 "command script import setup_LLDB_args.py"
             ],
-            "name": "LLDB Debug Module",
+            "name": "LLDB Debug Object",
             "type": "lldb",
             "request": "launch",
             "program": "${workspaceFolder}/build/bin/clang",
