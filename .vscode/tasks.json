@@ -4,7 +4,7 @@
 		{
 			"type": "shell",
 			"label": "LLVM Configure",
-			"command": "./doitlk-llvm-build.py",
+			"command": "./proj_bdo_llvm_build.py",
 			"args": [
 				"config"
 			],
@@ -13,7 +13,7 @@
 		{
 			"type": "shell",
 			"label": "LLVM Build Clang",
-			"command": "./doitlk-llvm-build.py",
+			"command": "./proj_bdo_llvm_build.py",
 			"args": [
 				"build",
 				"clang"
@@ -25,7 +25,7 @@
 		{
 			"type": "shell",
 			"label": "LLVM Build",
-			"command": "./doitlk-llvm-build.py",
+			"command": "./proj_bdo_llvm_build.py",
 			"args": [
 				"build",
 				"${input:target}"
@@ -37,10 +37,10 @@
 		{
 			"label": "produceCompileArgsFile",
 			"hide": true,
-			"command": "./doitlk-debug-get-compile-command-args.py",
+			"command": "./proj_bdo_debug_get_compile_command_args.py",
 			"args": [
 				"writeArgsToFile",
-				"${input:moduleCompileCommandsPath}"
+				"${input:objectCompileCommandsPath}"
 			],
 			"problemMatcher": [],
 			"dependsOn": [
@@ -51,7 +51,7 @@
 			"type": "shell",
 			"label": "removCompileArgsFile",
 			"hide": true,
-			"command": "./doitlk-debug-get-compile-command-args.py",
+			"command": "./proj_bdo_debug_get_compile_command_args.py",
 			"args": [
 				"clean"
 			],
@@ -65,7 +65,7 @@
 			"description": "CMake Build Target"
 		},
 		{
-			"id": "moduleCompileCommandsPath",
+			"id": "objectCompileCommandsPath",
 			"type": "command",
 			"command": "extension.commandvariable.file.pickFile",
 			"args": {
