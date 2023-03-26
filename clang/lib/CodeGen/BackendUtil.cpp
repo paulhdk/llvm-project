@@ -960,6 +960,15 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
             [](ModulePassManager &MPM, OptimizationLevel Level) {
               MPM.addPass(LKMMAnnotateDepsPass());
             });
+      } else if (IsLTO) {
+        PB.registerFullLinkTimeOptimizationEarlyEPCallback(
+            [](ModulePassManager &MPM, OptimizationLevel Level) {
+              MPM.addPass(LKMMAnnotateDepsPass());
+            });
+        PB.registerFullLinkTimeOptimizationLastEPCallback(
+            [](ModulePassManager &MPM, OptimizationLevel Level) {
+              MPM.addPass(LKMMVerifyDepsPass());
+            });
       } else {
         PB.registerPipelineStartEPCallback(
             [](ModulePassManager &MPM, OptimizationLevel Level) {
