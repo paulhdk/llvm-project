@@ -1666,17 +1666,27 @@ void BFSCtx::findDependentArgs(PotAddrDepBeg &ADB, CallBase *CallB,
   for (unsigned Ind = 0; Ind < CallB->arg_size(); ++Ind) {
     auto *VCmp = CallB->getArgOperand(Ind);
 
-    // FIXME: Can this be made nicer?
     if (ADB.belongsToDepChain(BB, DCLink(VCmp, DCLevel::PTR)))
       if (CalledF)
         if (!CalledF->isVarArg())
           DepArgs->emplace_back(Ind, DCLevel::PTR);
 
-    // FIXME: Basically duplicate
-    if (ADB.belongsToDepChain(BB, DCLink(VCmp, DCLevel::PTE)))
-      if (CalledF)
-        if (!CalledF->isVarArg())
-          DepArgs->emplace_back(Ind, DCLevel::PTE);
+    // If we discover that a PTE-level value of a dependency chain runs into a
+    // function we cannot analyse, we only assume that it won't break the
+    // dependency chain if it is a void intrinsic. In that case, we will clear
+    // the DepArgs set, causing no dependency chains to be removed by the
+    // calling function. Otherwise, we will have to assume that it can break the
+    // dependency chain and have to throw it away to avoid false positives.
+    if (ADB.belongsToDepChain(BB, DCLink(VCmp, DCLevel::PTE))) {
+      if (CalledF && !CalledF->isVarArg()) {
+        if ((isa<IntrinsicInst>(CallB) &&
+             CalledF->getReturnType()->isVoidTy())) {
+          DepArgs->clear();
+          return;
+        }
+        DepArgs->emplace_back(Ind, DCLevel::PTE);
+      }
+    }
   }
 }
 
@@ -1792,19 +1802,11 @@ void BFSCtx::handleCall(CallBase &CallB) {
   // access memory at all).
 
   // FIXME: CallI.isIndirectCall() == !CalledF ?
-  if (!CalledF) {
+  if (!CalledF || CalledF->hasExternalLinkage() || CalledF->isIntrinsic() ||
+      CalledF->isVarArg() || CalledF->empty() || CallB.isIndirectCall())
     FirstBB = nullptr;
-  } else if (CalledF->hasExternalLinkage() || CalledF->isIntrinsic() ||
-             CalledF->isVarArg() || CalledF->empty() ||
-             CallB.isIndirectCall()) {
-    if (CalledF->onlyReadsMemory() ||
-        (isa<IntrinsicInst>(CallB) && CalledF->getReturnType()->isVoidTy())) {
-      return;
-    }
-    FirstBB = nullptr;
-  } else {
+  else
     FirstBB = &*CalledF->begin();
-  }
 
   InterprocBFSRes Res;
 
