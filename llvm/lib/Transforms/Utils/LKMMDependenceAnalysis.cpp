@@ -57,6 +57,7 @@
 // FIXME: Pass by const reference for read access, pointer for RW access
 
 namespace llvm {
+namespace {
 static cl::opt<bool> InjectBugs(
     "lkmm-enable-tests",
     cl::desc("Enable the LKMM dependency checker tests. Requires the tests "
@@ -68,11 +69,11 @@ static cl::opt<bool> FullToPartialOpt(
     cl::desc("Enable warnings for LKMM addr dependencies based on full to "
              "partial addr dependency conversion"),
     cl::Hidden, cl::init(false));
+} // namespace
 
 // Avoid the std:: qualifier if possible
 using std::list;
 using std::make_shared;
-using std::move;
 using std::pair;
 using std::shared_ptr;
 using std::string;
@@ -1301,7 +1302,7 @@ public:
 
     VADE.setBrokenBy(BrokenBy);
 
-    BrokenADEs->emplace(VADB.getID(), move(VADE));
+    BrokenADEs->emplace(VADB.getID(), std::move(VADE));
   }
 
   static bool classof(const BFSCtx *C) { return C->getKind() == CK_Ver; }
@@ -1610,12 +1611,12 @@ InterprocBFSRes BFSCtx::runInterprocBFS(BasicBlock *FirstBB, CallBase *CallB) {
   if (auto *AC = dyn_cast<AnnotCtx>(this)) {
     AnnotCtx InterprocCtx = AnnotCtx(*AC, FirstBB, CallB);
     InterprocCtx.runBFS();
-    return InterprocBFSRes(move(InterprocCtx.ADBsToBeReturned));
+    return InterprocBFSRes(std::move(InterprocCtx.ADBsToBeReturned));
   }
   if (auto *VC = dyn_cast<VerCtx>(this)) {
     VerCtx InterprocCtx = VerCtx(*VC, FirstBB, CallB);
     InterprocCtx.runBFS();
-    return InterprocBFSRes(move(InterprocCtx.ADBsToBeReturned));
+    return InterprocBFSRes(std::move(InterprocCtx.ADBsToBeReturned));
   }
   llvm_unreachable("Called runInterprocBFS() with no BFSCtx child.");
 }
@@ -1808,7 +1809,7 @@ void BFSCtx::handleCall(CallBase &CallB) {
       ADB.addStepToPathFrom(&CallB, true);
 
       if (InheritedADBs.find(ID) != InheritedADBs.end())
-        ADBsToBeReturned.push_back(move(IRetAD));
+        ADBsToBeReturned.push_back(std::move(IRetAD));
 
       ADBs.erase(ID);
     } else if (auto *RADB = dyn_cast<ReturnedADB>(IRetAD.get())) {
@@ -1817,7 +1818,7 @@ void BFSCtx::handleCall(CallBase &CallB) {
         if (RADB->DiscoveredInInterproc ||
             (ADBs.find(ID) == ADBs.end() &&
              InheritedADBs.find(ID) != InheritedADBs.end())) {
-          ADBs.emplace(ID, move(RADB->ADB));
+          ADBs.emplace(ID, std::move(RADB->ADB));
           ADBs.at(ID).resetDCM(BB);
         }
 
@@ -1852,7 +1853,7 @@ void BFSCtx::handleCall(CallBase &CallB) {
         // if we are verifying and continue.
         if (auto *VC = dyn_cast<VerCtx>(this)) {
           VC->addToOutsideIDs(RADB->ADB.getID());
-          ADBsToBeReturned.push_back(move(IRetAD));
+          ADBsToBeReturned.push_back(std::move(IRetAD));
         }
       }
     }
@@ -1901,7 +1902,7 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
     DC.insert(DCLink{LoadVal, DCLevel::PTR});
 
     if (!ADBs.emplace(ID, PotAddrDepBeg(&LoadI, ID, getFullPath(&LoadI, true),
-                                        move(DC), LoadI.getParent()))
+                                        std::move(DC), LoadI.getParent()))
              .second)
       errs() << "Couldn't insert new PotAddrDepBeg";
   }
@@ -2085,7 +2086,7 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
     else if (!ADBDiscoverdInThisF)
       return;
 
-    ADBsToBeReturned.push_back(move(RADB));
+    ADBsToBeReturned.push_back(std::move(RADB));
   }
 }
 
@@ -2267,7 +2268,7 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       DepChain DC;
       DC.insert(DCLink(I, DCLevel::PTR));
       ADBs.emplace(ParsedID, PotAddrDepBeg(I, ParsedID, getFullPath(I, true),
-                                           move(DC), I->getParent()));
+                                           std::move(DC), I->getParent()));
 
       if (ParsedDepHalfTypeStr.find("address dep") != string::npos)
         // Assume broken until proven wrong.
