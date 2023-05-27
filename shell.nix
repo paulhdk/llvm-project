@@ -8,6 +8,7 @@ let
     pyyaml
     pygments
   ]);
+  pkgs-unstable = import <nixpkgs-unstable> {};
 in
 pkgs.llvmPackages_latest.stdenv.mkDerivation {
   name = "llvm-debug-env";
@@ -22,6 +23,7 @@ pkgs.llvmPackages_latest.stdenv.mkDerivation {
     pkgs.llvmPackages_latest.lld
     pkgs.llvmPackages_latest.lldb
     pkgs.pkg-config
+    pkgs-unstable.clang-tools_16
   ];
   buildInputs = [ pkgs.zlib ];
   hardeningDisable = [ "all" ];
