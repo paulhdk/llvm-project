@@ -20,6 +20,7 @@
 
 #include "llvm/Transforms/Utils/LKMMDependenceAnalysis.h"
 #include "llvm/ADT/DenseMapInfo.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -29,12 +30,14 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ValueMap.h"
@@ -83,6 +86,8 @@ using std::unordered_set;
 
 constexpr StringRef ADBStr = "LKMMDep: address dep begin";
 constexpr StringRef ADEStr = "LKMMDep: address dep end";
+constexpr StringRef PCsADBStr = "AddrDepBeginnings";
+constexpr StringRef PCsADEStr = "AddrDepEndings";
 
 // FIXME Is there a more elegant way of dealing with duplicate IDs
 // (preferably getting eliminating the problem all together)?
@@ -1467,6 +1472,7 @@ bool PotAddrDepBeg::belongsToDepChain(BasicBlock *BB, DCLink DCLCmp) {
 
 void PotAddrDepBeg::addAddrDep(string ID2, string PathToViaFiles2,
                                Instruction *I2) const {
+  // TODO: refactor into generateIDs(), addAnnotations(), addPCs()
   auto DepID = getInstLocString(I) + PathFrom + ID2;
 
   auto BegAnnotStr = ADBStr.str() + ",\n" + DepID + ",\n" + getID() + ",\n";
@@ -1481,6 +1487,30 @@ void PotAddrDepBeg::addAddrDep(string ID2, string PathToViaFiles2,
 
   I->addAnnotationMetadata(BegAnnotStr);
   I2->addAnnotationMetadata(EndAnnotStr);
+
+  auto *LLVMCtx = &I2->getFunction()->getContext();
+  auto IRB = IRBuilder(*LLVMCtx);
+
+  size_t H = hash_value(DepID);
+  auto *IDConst = IRB.getInt64(H);
+
+  SmallVector<MDBuilder::PCSection, 1> PCs1;
+  PCs1.push_back(MDBuilder::PCSection{PCsADBStr, {IDConst}});
+
+  SmallVector<MDBuilder::PCSection, 1> PCs2;
+  PCs2.push_back(MDBuilder::PCSection{PCsADEStr, {IDConst}});
+
+  auto MDB = MDBuilder(I->getFunction()->getContext());
+  auto *MD = I->getMetadata(LLVMContext::MD_annotation);
+
+  for (auto &O : MD->operands()) {
+    auto OStr = cast<MDString>(O.get())->getString();
+
+    if (OStr.equals(BegAnnotStr))
+      I->setMetadata(LLVMContext::MD_pcsections, MDB.createPCSections(PCs1));
+    else if (OStr.equals(EndAnnotStr))
+      I2->setMetadata(LLVMContext::MD_pcsections, MDB.createPCSections(PCs2));
+  }
 }
 
 bool PotAddrDepBeg::depChainsShareLink(
