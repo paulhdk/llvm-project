@@ -507,8 +507,8 @@ protected:
              string PathToViaFiles, string ParsedDepHalfID,
              string ParsedPathToViaFiles, DepKind Kind)
       : DepHalf(I, DepHalfID, PathToViaFiles, Kind), ParsedID(ParsedID),
-        ParsedDepHalfID(ParsedDepHalfID), ParsedPathToViaFiles{
-                                              ParsedPathToViaFiles} {}
+        ParsedDepHalfID(ParsedDepHalfID),
+        ParsedPathToViaFiles{ParsedPathToViaFiles} {}
 
 private:
   // Shows how this dependency got broken
