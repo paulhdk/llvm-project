@@ -1469,18 +1469,18 @@ void PotAddrDepBeg::addAddrDep(string ID2, string PathToViaFiles2,
                                Instruction *I2) const {
   auto DepID = getInstLocString(I) + PathFrom + ID2;
 
-  auto BeginAnnotation = ADBStr.str() + ",\n" + DepID + ",\n" + getID() + ",\n";
-  auto EndAnnotation = ADEStr.str() + ",\n" + DepID + ",\n" + ID2 + ",\n";
+  auto BegAnnotStr = ADBStr.str() + ",\n" + DepID + ",\n" + getID() + ",\n";
+  auto EndAnnotStr = ADEStr.str() + ",\n" + DepID + ",\n" + ID2 + ",\n";
 
   // We only annotate if we haven't annotated this exact dependency before.
-  if (hasAnnotation(I, BeginAnnotation) && hasAnnotation(I2, EndAnnotation))
+  if (hasAnnotation(I, BegAnnotStr) && hasAnnotation(I2, EndAnnotStr))
     return;
 
-  BeginAnnotation += getPathToViaFiles() + ";";
-  EndAnnotation += PathToViaFiles2 + ",\n" + ";";
+  BegAnnotStr += getPathToViaFiles() + ";";
+  EndAnnotStr += PathToViaFiles2 + ",\n" + ";";
 
-  I->addAnnotationMetadata(BeginAnnotation);
-  I2->addAnnotationMetadata(EndAnnotation);
+  I->addAnnotationMetadata(BegAnnotStr);
+  I2->addAnnotationMetadata(EndAnnotStr);
 }
 
 bool PotAddrDepBeg::depChainsShareLink(
