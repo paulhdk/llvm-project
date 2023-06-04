@@ -1301,13 +1301,16 @@ public:
 
   void addToOutsideIDs(string ID) { OutsideIDs.insert(ID); }
 
-  void addBrokenEnding(VerAddrDepBeg VADB, VerAddrDepEnd VADE, DepChain DC,
-                       VerDepHalf::BrokenByType BrokenBy) {
+  VerAddrDepEnd *addBrokenEnding(VerAddrDepBeg VADB, VerAddrDepEnd VADE,
+                                 DepChain DC,
+                                 VerDepHalf::BrokenByType BrokenBy) {
     VADB.setDCP(DC);
 
     VADE.setBrokenBy(BrokenBy);
 
-    BrokenADEs->emplace(VADB.getID(), std::move(VADE));
+    auto R = BrokenADEs->emplace(VADB.getID(), std::move(VADE));
+
+    return R.second ? &R.first->second : nullptr;
   }
 
   static bool classof(const BFSCtx *C) { return C->getKind() == CK_Ver; }
