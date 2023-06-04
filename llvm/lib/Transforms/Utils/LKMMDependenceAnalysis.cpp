@@ -1337,8 +1337,8 @@ private:
   ///  \p Inst.
   ///
   /// \returns true if the address dependency could be verified.
-  bool isADBBroken(string const &ID, Instruction *I, string &ParsedPathTo,
-                   string &ParsedPathToViaFiles);
+  bool wasADBPreserved(string const &ID, Instruction *IEnd,
+                       string &ParsedPathTo, string &ParsedPathToViaFiles);
 
   /// Responsible for updating an ID if the verification pass has encountered
   /// it before. Will add the updated ID to \p RemappedIDs.
@@ -2191,14 +2191,14 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
 // VerCtx Implementations
 //===----------------------------------------------------------------------===//
 
-bool VerCtx::isADBBroken(string const &ID, Instruction *I,
-                         string &ParsedDepHalfID,
-                         string &ParsedPathToViaFiles) {
+bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
+                             string &ParsedDepHalfID,
+                             string &ParsedPathToViaFiles) {
   auto DCLCmp = DCLink(nullptr, DCLevel::PTR);
 
-  if (auto *SI = dyn_cast<StoreInst>(I))
+  if (auto *SI = dyn_cast<StoreInst>(IEnd))
     DCLCmp.Val = SI->getPointerOperand();
-  else if (auto *LI = dyn_cast<LoadInst>(I))
+  else if (auto *LI = dyn_cast<LoadInst>(IEnd))
     DCLCmp.Val = LI->getPointerOperand();
   else
     llvm_unreachable("Non-store or non-load instruction in handleAddrDepID().");
@@ -2313,15 +2313,16 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       // in unoptimised IR, hence we only look for one dependency in
       // optimised IR.
       if (ParsedDepHalfTypeStr.find("address dep") != string::npos) {
-        if (isADBBroken(ParsedID, I, ParsedDepHalfID, ParsedPathToViaFiles)) {
+        if (wasADBPreserved(ParsedID, I, ParsedDepHalfID,
+                            ParsedPathToViaFiles)) {
           markIDAsVerified(ParsedID);
           continue;
         }
 
         if (RemappedIDs->find(ParsedID) != RemappedIDs->end()) {
           for (auto const &RemappedID : RemappedIDs->at(ParsedID)) {
-            if (isADBBroken(RemappedID, I, ParsedDepHalfID,
-                            ParsedPathToViaFiles)) {
+            if (wasADBPreserved(RemappedID, I, ParsedDepHalfID,
+                                ParsedPathToViaFiles)) {
               markIDAsVerified(ParsedID);
               break;
             }
