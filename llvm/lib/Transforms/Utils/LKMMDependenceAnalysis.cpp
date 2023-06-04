@@ -315,6 +315,8 @@ protected:
 
   string PathFrom;
 
+  bool Delegated;
+
   DepHalf(Instruction *I, string ID, string PathToViaFiles, DepKind Kind)
       : I(I), ID(ID), PathToViaFiles(PathToViaFiles), PathFrom("\n"),
         Kind(Kind){};
@@ -556,11 +558,19 @@ public:
                 string PathToViaFiles, string ParsedDepHalfID,
                 string ParsedPathToViaFiles)
       : VerDepHalf(I, ParsedID, DepHalfID, PathToViaFiles, ParsedDepHalfID,
-                   ParsedPathToViaFiles, DK_VerAddrEnd) {}
+                   ParsedPathToViaFiles, DK_VerAddrEnd),
+        Delegated{false} {}
+
+  void delegateToDynAnalysis() { Delegated = true; }
+
+  bool hasBeenDelegatedToDynAnalysis() { return Delegated; }
 
   static bool classof(const DepHalf *VDH) {
     return VDH->getKind() == DK_VerAddrEnd;
   }
+
+private:
+  bool Delegated;
 };
 
 struct InterprocRetAddrDep {
@@ -1357,6 +1367,15 @@ private:
       ID = ID + "-#" + to_string(S + 1);
     }
   }
+
+  // TODO:When can dependencies be delegated?
+  bool canBeDelegatedToDynAnalaysis(string const &ID, Instruction *IEnd) {
+    if (ID ==
+        "\n__stm_source_link_drop::1071:9\n__stm_source_link_drop::1085:2->"
+        "pm_runtime_mark_last_busy()\npm_runtime_mark_last_busy::233:2")
+      return true;
+    return false;
+  }
 };
 
 //===----------------------------------------------------------------------===//
@@ -1490,30 +1509,6 @@ void PotAddrDepBeg::addAddrDep(string ID2, string PathToViaFiles2,
 
   I->addAnnotationMetadata(BegAnnotStr);
   I2->addAnnotationMetadata(EndAnnotStr);
-
-  auto *LLVMCtx = &I2->getFunction()->getContext();
-  auto IRB = IRBuilder(*LLVMCtx);
-
-  size_t H = hash_value(DepID);
-  auto *IDConst = IRB.getInt64(H);
-
-  SmallVector<MDBuilder::PCSection, 1> PCs1;
-  PCs1.push_back(MDBuilder::PCSection{PCsADBStr, {IDConst}});
-
-  SmallVector<MDBuilder::PCSection, 1> PCs2;
-  PCs2.push_back(MDBuilder::PCSection{PCsADEStr, {IDConst}});
-
-  auto MDB = MDBuilder(I->getFunction()->getContext());
-  auto *MD = I->getMetadata(LLVMContext::MD_annotation);
-
-  for (auto &O : MD->operands()) {
-    auto OStr = cast<MDString>(O.get())->getString();
-
-    if (OStr.equals(BegAnnotStr))
-      I->setMetadata(LLVMContext::MD_pcsections, MDB.createPCSections(PCs1));
-    else if (OStr.equals(EndAnnotStr))
-      I2->setMetadata(LLVMContext::MD_pcsections, MDB.createPCSections(PCs2));
-  }
 }
 
 bool PotAddrDepBeg::depChainsShareLink(
@@ -2223,6 +2218,7 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
 
     auto &VADB = BrokenADBs->at(ID);
     auto BrokenBy = VerDepHalf::BrokenDC;
+    VerAddrDepEnd *BADE = nullptr;
 
     if (PartOfADBs) {
       auto &ADB = ADBs.at(ID);
@@ -2233,20 +2229,49 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
         if (auto *DCU = ADB.getDCsAt(BB))
           DC = *DCU;
 
-        addBrokenEnding(VADB,
-                        VerAddrDepEnd(I, ID, getFullPath(I),
-                                      getFullPath(I, true), ParsedDepHalfID,
-                                      ParsedPathToViaFiles),
-                        DC, BrokenBy);
+        BADE = addBrokenEnding(
+            VADB,
+            VerAddrDepEnd(IEnd, ID, getFullPath(IEnd), getFullPath(IEnd, true),
+                          ParsedDepHalfID, ParsedPathToViaFiles),
+            DC, BrokenBy);
       } else
         return true;
     }
 
     if (PartOfOutsideIDs) {
-      addBrokenEnding(BrokenADBs->at(ID),
-                      VerAddrDepEnd(I, ID, getFullPath(I), getFullPath(I, true),
-                                    ParsedDepHalfID, ParsedPathToViaFiles),
-                      {}, BrokenBy);
+      BADE = addBrokenEnding(
+          BrokenADBs->at(ID),
+          VerAddrDepEnd(IEnd, ID, getFullPath(IEnd), getFullPath(IEnd, true),
+                        ParsedDepHalfID, ParsedPathToViaFiles),
+          {}, BrokenBy);
+    }
+
+    if (BADE) {
+      if (canBeDelegatedToDynAnalaysis(ID, IEnd)) {
+        errs() << "Adding PC section\n";
+        auto *IBeg = BrokenADBs->at(ID).getInst();
+
+        auto *LLVMCtx = &IEnd->getFunction()->getContext();
+        auto IRB = IRBuilder(*LLVMCtx);
+
+        size_t H = hash_value(ID);
+        auto *IDConst = IRB.getInt64(H);
+
+        SmallVector<MDBuilder::PCSection, 1> PCs1;
+        PCs1.push_back(MDBuilder::PCSection{PCsADBStr, {IDConst}});
+
+        SmallVector<MDBuilder::PCSection, 1> PCs2;
+        PCs2.push_back(MDBuilder::PCSection{PCsADEStr, {IDConst}});
+
+        auto MDB = MDBuilder(*LLVMCtx);
+
+        IBeg->setMetadata(LLVMContext::MD_pcsections,
+                          MDB.createPCSections(PCs1));
+        IEnd->setMetadata(LLVMContext::MD_pcsections,
+                          MDB.createPCSections(PCs2));
+
+        BADE->delegateToDynAnalysis();
+      }
     }
   }
   return false;
@@ -2503,6 +2528,9 @@ void LKMMVerifier::printBrokenDeps() {
       return;
 
     auto &VDE = VDEP->second;
+
+    if (VDE.hasBeenDelegatedToDynAnalysis())
+      return;
 
     if (PrintedBrokenIDs.find(ID) != PrintedBrokenIDs.end())
       return;
