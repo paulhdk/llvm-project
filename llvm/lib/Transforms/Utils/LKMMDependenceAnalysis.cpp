@@ -1371,8 +1371,11 @@ private:
   // TODO:When can dependencies be delegated?
   bool canBeDelegatedToDynAnalaysis(string const &ID, Instruction *IEnd) {
     if (ID ==
-        "\n__stm_source_link_drop::1071:9\n__stm_source_link_drop::1085:2->"
-        "pm_runtime_mark_last_busy()\npm_runtime_mark_last_busy::233:2")
+            "\n__stm_source_link_drop::1071:9\n__stm_source_link_drop::1085:2->"
+            "pm_runtime_mark_last_busy()\npm_runtime_mark_last_busy::233:"
+            "2" ||
+        ID == "\nproj_bdo_rr_addr_dep_begin_simple::41:7\nproj_"
+              "bdo_rr_addr_dep_begin_simple::45:7")
       return true;
     return false;
   }
