@@ -2114,7 +2114,7 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
     else if (RetAtPTE)
       RADB->Lvl = DCLevel::PTE;
     else if (!ADBDiscoverdInThisF)
-      return;
+      continue;
 
     ADBsToBeReturned.push_back(std::move(RADB));
   }
