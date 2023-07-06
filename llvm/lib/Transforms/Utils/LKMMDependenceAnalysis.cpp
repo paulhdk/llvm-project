@@ -1847,9 +1847,7 @@ void BFSCtx::handleCall(CallBase &CallB) {
     } else if (auto *RADB = dyn_cast<ReturnedADB>(IRetAD.get())) {
       auto &Lvl = RADB->Lvl;
       if (Lvl != DCLevel::NORET) {
-        if (RADB->DiscoveredInInterproc ||
-            (ADBs.find(ID) == ADBs.end() &&
-             InheritedADBs.find(ID) != InheritedADBs.end())) {
+        if (ADBs.find(ID) == ADBs.end()) {
           ADBs.emplace(ID, std::move(RADB->ADB));
           ADBs.at(ID).resetDCM(BB);
         }
