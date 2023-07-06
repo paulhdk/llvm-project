@@ -2250,7 +2250,6 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
 
     if (BADE) {
       if (canBeDelegatedToDynAnalaysis(ID, IEnd)) {
-        errs() << "Adding PC section\n";
         auto *IBeg = BrokenADBs->at(ID).getInst();
 
         auto *LLVMCtx = &IEnd->getFunction()->getContext();
