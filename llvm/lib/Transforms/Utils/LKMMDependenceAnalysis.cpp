@@ -45,6 +45,7 @@
 #include "llvm/Support/Debug.h"
 #include <list>
 #include <queue>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -88,6 +89,13 @@ constexpr StringRef ADEStr = "LKMMDep: address dep end";
 constexpr StringRef PCsADBStr = "AddrDepBeginnings";
 constexpr StringRef PCsADEStr = "AddrDepEndings";
 
+hash_code strToHashCode(string S) {
+  size_t V;
+  std::istringstream StrStr(S);
+  StrStr >> V;
+  return hash_code(V);
+}
+
 // FIXME Is there a more elegant way of dealing with duplicate IDs
 // (preferably getting eliminating the problem all together)?
 
@@ -95,10 +103,10 @@ constexpr StringRef PCsADEStr = "AddrDepEndings";
 // which verification contexts use for remapping duplicate IDs. Duplicate
 // IDs appear when an annotated instruction is duplicated as part of
 // optimizations.
-using IDReMap = unordered_map<string, unordered_set<string>>;
+using IDReMap = unordered_map<hash_code, unordered_set<hash_code>>;
 
 // Represents a map of IDs to (potential) dependency halfs.
-template <typename T> using DepHalfMap = unordered_map<string, T>;
+template <typename T> using DepHalfMap = unordered_map<hash_code, T>;
 
 /// Every dep chain link has a DCLevel. The level tracks whether the pointer
 /// itself or the pointed-to value, the pointee, is part of the dependency
@@ -154,7 +162,7 @@ using DepChain = SetVector<DCLink>;
 // at that BB. Such a map exists for every potential addr dep beginning.
 using DepChainMap = MapVector<BasicBlock *, DepChain>;
 
-using VerIDSet = unordered_set<string>;
+using VerIDSet = unordered_set<hash_code>;
 
 using CallPathStack = list<CallBase *>;
 
@@ -249,7 +257,7 @@ public:
   /// Returns the ID of this DepHalf.
   ///
   /// \returns the DepHalf's ID.
-  string getID() const;
+  hash_code getID() const;
 
   /// Returns a string representation of the path the annotation pass took
   /// to discover this DepHalf. The difference is, that the path is expressed in
@@ -307,7 +315,7 @@ protected:
   // verification of dependencies. IDs are represented by a string
   // representation of the calls the BFS took to reach Inst, including inst, and
   // are assumed to be unique within the BFS.
-  const string ID;
+  const hash_code ID;
 
   // FIXME: can this be removed?
   const string PathToViaFiles;
@@ -316,7 +324,7 @@ protected:
 
   bool Delegated;
 
-  DepHalf(Instruction *I, string ID, string PathToViaFiles, DepKind Kind)
+  DepHalf(Instruction *I, hash_code ID, string PathToViaFiles, DepKind Kind)
       : I(I), ID(ID), PathToViaFiles(PathToViaFiles), PathFrom("\n"),
         Kind(Kind){};
 
@@ -328,8 +336,8 @@ private:
 
 class PotAddrDepBeg : public DepHalf {
 public:
-  PotAddrDepBeg(Instruction *I, string ID, string PathToViaFiles, DepChain DC,
-                BasicBlock *BB)
+  PotAddrDepBeg(Instruction *I, hash_code ID, string PathToViaFiles,
+                DepChain DC, BasicBlock *BB)
       : DepHalf(I, ID, PathToViaFiles, DK_AddrBeg), DCM{} {
     DCM.insert(pair<BasicBlock *, DepChain>{BB, DC});
   }
@@ -506,10 +514,10 @@ public:
     return VDH->getKind() >= DK_VerAddrBeg && VDH->getKind() <= DK_VerAddrEnd;
   }
 
-  string const &getParsedID() const { return ParsedID; }
+  hash_code const &getParsedID() const { return ParsedID; }
 
 protected:
-  VerDepHalf(Instruction *I, string ParsedID, string DepHalfID,
+  VerDepHalf(Instruction *I, hash_code ParsedID, hash_code DepHalfID,
              string PathToViaFiles, string ParsedDepHalfID,
              string ParsedPathToViaFiles, DepKind Kind)
       : DepHalf(I, DepHalfID, PathToViaFiles, Kind), ParsedID(ParsedID),
@@ -521,7 +529,7 @@ private:
   BrokenByType BrokenBy;
 
   // The ID which identifies the two metadata annotations for this dependency.
-  const string ParsedID;
+  const hash_code ParsedID;
 
   // The PathTo which was attached to the metadata annotation, i.e. the
   // path to I in unoptimised IR.
@@ -532,7 +540,7 @@ private:
 
 class VerAddrDepBeg : public VerDepHalf {
 public:
-  VerAddrDepBeg(Instruction *I, string ParsedID, string DepHalfID,
+  VerAddrDepBeg(Instruction *I, hash_code ParsedID, hash_code DepHalfID,
                 string PathToViaFiles, string ParsedPathTo,
                 string ParsedPathToViaFiles)
       : VerDepHalf(I, ParsedID, DepHalfID, PathToViaFiles, ParsedPathTo,
@@ -553,7 +561,7 @@ private:
 
 class VerAddrDepEnd : public VerDepHalf {
 public:
-  VerAddrDepEnd(Instruction *I, string ParsedID, string DepHalfID,
+  VerAddrDepEnd(Instruction *I, hash_code ParsedID, hash_code DepHalfID,
                 string PathToViaFiles, string ParsedDepHalfID,
                 string ParsedPathToViaFiles)
       : VerDepHalf(I, ParsedID, DepHalfID, PathToViaFiles, ParsedDepHalfID,
@@ -1290,7 +1298,7 @@ public:
   ///  annotation(s).
   void handleDepAnnotations(Instruction *I, MDNode *MDAnnotation);
 
-  void markIDAsVerified(string ParsedID) {
+  void markIDAsVerified(hash_code ParsedID) {
     auto DelId = [](auto &ID, auto &Bs, auto &Es, auto &RemappedIDs) {
       Bs->erase(ID);
       Es->erase(ID);
@@ -1356,9 +1364,9 @@ private:
   /// it before. Will add the updated ID to \p RemappedIDs.
   ///
   /// \param ID a reference to the ID which should be updated.
-  void updateID(string &ID) {
+  void updateID(hash_code &ID) {
     if (RemappedIDs->find(ID) == RemappedIDs->end()) {
-      RemappedIDs->emplace(ID, unordered_set<string>{ID + "-#1"});
+      RemappedIDs->emplace(ID, unordered_set<hash_code>{ID + "-#1"});
       ID = ID + "-#1";
     } else {
       auto S = RemappedIDs->at(ID).size();
@@ -2295,7 +2303,7 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
     parseDepHalfString(CurrentDepHalfStr, AnnotData);
 
     auto &ParsedDepHalfTypeStr = AnnotData[0];
-    auto &ParsedID = AnnotData[1];
+    hash_code ParsedID = strToHashCode(AnnotData[1]);
 
     if (VerifiedIDs->find(ParsedID) != VerifiedIDs->end())
       continue;
