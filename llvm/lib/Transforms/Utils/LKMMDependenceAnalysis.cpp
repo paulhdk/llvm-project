@@ -2554,7 +2554,7 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
     llvm_unreachable("Invalid beginning type when printing broken dependency.");
 
   errs() << "//===--------------------------Broken "
-            "Dependency---------------------------===//\n";
+            "Dependency--------------------------===//\n";
 
   errs() << DepKindStr << " with ID: " << ID << "\n\n";
 
@@ -2622,7 +2622,7 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
 #undef DEBUG_TYPE
 
   errs() << "//"
-            "===-----------------------------------------------------------"
+            "===----------------------------------------------------------"
             "----"
             "-------===//\n\n";
 }
