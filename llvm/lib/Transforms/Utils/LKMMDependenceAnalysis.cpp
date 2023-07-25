@@ -60,9 +60,9 @@
 
 namespace llvm {
 namespace {
-enum CheckingLvl { Strict, Relaxed, StrictRelaxed };
+enum DCGran { Strict, Relaxed, StrictRelaxed };
 
-cl::opt<CheckingLvl> OptimizationLevel(
+cl::opt<DCGran> Granularity(
     cl::desc("Choose DepChecker granularity:"),
     cl::values(clEnumVal(Strict, "Only check at dependency endings."),
                clEnumVal(Relaxed, "Only check loads and store on the "
@@ -1051,6 +1051,32 @@ public:
   /// Skipped.
   void visitCleanupPadInst(CleanupPadInst &CleanupPadI) {}
 
+  /// Checks whether a broken dependency check should be made for the specified
+  /// instruction. This depends on the user-specified DepChecker granularity.
+  ///
+  /// \param I the instruction in question
+  ///
+  /// \returns true if a check should be made for the instruction. false
+  /// otherwise.
+  bool shouldCheckInst(Instruction &I) {
+    if (!isa<LoadInst>(I) || !isa<StoreInst>(I))
+      return false;
+    if (Granularity == Relaxed)
+      return !I.isVolatile();
+    if (Granularity == Strict)
+      return I.isVolatile();
+    return true;
+  }
+
+  /// Checks whether the specified instruction can head a dependency chain.
+  ///
+  /// \param I the instruction in question
+  ///
+  /// \returns true if the instruction can head a dependency chain.
+  bool isDepChainBeginning(Instruction &I) {
+    return isa<LoadInst>(I) && I.isVolatile();
+  }
+
 protected:
   // The BB the BFS is currently checking.
   BasicBlock *BB;
@@ -1918,20 +1944,20 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
     depChainThroughInst(LoadI, DCLAdd, SmallVector<DCLink>{DCLCmp});
 
     // FIXME: this gets checked every loop iteration.
-    if (LoadI.isVolatile())
+    if (shouldCheckInst(LoadI))
       if (isa<AnnotCtx>(this))
         if (ADB.belongsToDepChain(BB, DCLEnd))
           ADB.addAddrDep(getInstLocString(&LoadI), getFullPath(&LoadI, true),
                          &LoadI);
   }
 
-  if (!LoadI.isVolatile())
+  if (!isDepChainBeginning(LoadI))
     return;
 
   if (isa<VerCtx>(this))
     return;
 
-  // Try to add new PotAddrDepBeg for volatile load
+  // Try to add new PotAddrDepBeg for dep chain beginnings
   auto ID = getFullPath(&LoadI);
 
   if (ADBs.find(ID) == ADBs.end()) {
@@ -1979,7 +2005,7 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
     auto &ID = ADBPIt->first;
     auto &ADB = ADBPIt->second;
 
-    if (StoreI.isVolatile()) {
+    if (shouldCheckInst(StoreI)) {
       if (isa<AnnotCtx>(this) && ADB.belongsToDepChain(BB, DCLEnd))
         ADB.addAddrDep(getInstLocString(&StoreI), getFullPath(&StoreI, true),
                        &StoreI);
