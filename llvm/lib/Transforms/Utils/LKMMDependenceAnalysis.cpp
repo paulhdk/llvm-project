@@ -1533,11 +1533,18 @@ bool PotAddrDepBeg::belongsToDepChain(BasicBlock *BB, DCLink DCLCmp) {
 
 void PotAddrDepBeg::addAddrDep(Instruction *I2, string PathToViaFiles2) const {
   // TODO: refactor into generateIDs(), addAnnotations(), addPCs()
+  string BegAnnotStr, EndAnnotStr;
   auto ID2 = getInstLocString(I2);
-  auto DepID = getInstLocString(I) + PathFrom + ID2;
 
-  auto BegAnnotStr = ADBStr.str() + ",\n" + DepID + ",\n" + getID() + ",\n";
-  auto EndAnnotStr = ADEStr.str() + ",\n" + DepID + ",\n" + ID2 + ",\n";
+  if (Granularity == Relaxed) {
+    BegAnnotStr = ADBStr.str() + ",\n" + getID() + ",\n" + getID() + ",\n";
+    EndAnnotStr = ADEStr.str() + ",\n" + getID() + ",\n" + ID2 + ",\n";
+  } else if (Granularity == Strict) {
+    auto DepID = getInstLocString(I) + PathFrom + ID2;
+
+    BegAnnotStr = ADBStr.str() + ",\n" + DepID + ",\n" + getID() + ",\n";
+    EndAnnotStr = ADEStr.str() + ",\n" + DepID + ",\n" + ID2 + ",\n";
+  }
 
   // We only annotate if we haven't annotated this exact dependency before.
   if (hasAnnotation(I, BegAnnotStr) && hasAnnotation(I2, EndAnnotStr))
