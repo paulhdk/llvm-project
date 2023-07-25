@@ -60,15 +60,15 @@
 
 namespace llvm {
 namespace {
-enum DCGran { Strict, Relaxed, StrictRelaxed };
+enum DCGran { Strict, Relaxed /*, StrictRelaxed */ };
 
 cl::opt<DCGran> Granularity(
     cl::desc("Choose DepChecker granularity:"),
     cl::values(clEnumVal(Strict, "Only check at dependency endings."),
                clEnumVal(Relaxed, "Only check loads and store on the "
-                                  "dependency chain, excluding the ending."),
-               clEnumVal(StrictRelaxed,
-                         "Union of \"strict\" and \"relaxed\" modes")),
+                                  "dependency chain, excluding the ending.")),
+    // clEnumVal(StrictRelaxed,
+    //           "Union of \"strict\" and \"relaxed\" modes")),
     cl::Hidden, cl::init(Strict));
 
 static cl::opt<bool> InjectBugs(
