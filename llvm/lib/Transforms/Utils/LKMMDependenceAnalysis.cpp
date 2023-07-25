@@ -60,6 +60,17 @@
 
 namespace llvm {
 namespace {
+enum CheckingLvl { Strict, Relaxed, StrictRelaxed };
+
+cl::opt<CheckingLvl> OptimizationLevel(
+    cl::desc("Choose DepChecker granularity:"),
+    cl::values(clEnumVal(Strict, "Only check at dependency endings."),
+               clEnumVal(Relaxed, "Only check loads and store on the "
+                                  "dependency chain, excluding the ending."),
+               clEnumVal(StrictRelaxed,
+                         "Union of \"strict\" and \"relaxed\" modes")),
+    cl::Hidden, cl::init(Strict));
+
 static cl::opt<bool> InjectBugs(
     "lkmm-enable-tests",
     cl::desc("Enable the LKMM dependency checker tests. Requires the tests "
