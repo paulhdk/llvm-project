@@ -438,9 +438,9 @@ public:
 
   /// Annotates an address dependency from a given ending to this beginning.
   ///
-  /// \param ID2 the ID of the ending.
   /// \param I2 the instruction where the address dependency ends.
-  void addAddrDep(string ID2, string PathToViaFiles2, Instruction *I2) const;
+  /// \param PathToViaFiles2 the path to the ending (via files).
+  void addAddrDep(Instruction *I2, string PathToViaFiles2) const;
 
   static bool classof(const DepHalf *VDH) {
     return VDH->getKind() == DK_AddrBeg;
@@ -1531,9 +1531,9 @@ bool PotAddrDepBeg::belongsToDepChain(BasicBlock *BB, DCLink DCLCmp) {
   return DC.contains(DCLCmp);
 }
 
-void PotAddrDepBeg::addAddrDep(string ID2, string PathToViaFiles2,
-                               Instruction *I2) const {
+void PotAddrDepBeg::addAddrDep(Instruction *I2, string PathToViaFiles2) const {
   // TODO: refactor into generateIDs(), addAnnotations(), addPCs()
+  auto ID2 = getInstLocString(I2);
   auto DepID = getInstLocString(I) + PathFrom + ID2;
 
   auto BegAnnotStr = ADBStr.str() + ",\n" + DepID + ",\n" + getID() + ",\n";
@@ -1947,8 +1947,7 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
     if (shouldCheckInst(LoadI))
       if (isa<AnnotCtx>(this))
         if (ADB.belongsToDepChain(BB, DCLEnd))
-          ADB.addAddrDep(getInstLocString(&LoadI), getFullPath(&LoadI, true),
-                         &LoadI);
+          ADB.addAddrDep(&LoadI, getFullPath(&LoadI, true));
   }
 
   if (!isDepChainBeginning(LoadI))
@@ -2007,8 +2006,7 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
 
     if (shouldCheckInst(StoreI)) {
       if (isa<AnnotCtx>(this) && ADB.belongsToDepChain(BB, DCLEnd))
-        ADB.addAddrDep(getInstLocString(&StoreI), getFullPath(&StoreI, true),
-                       &StoreI);
+        ADB.addAddrDep(&StoreI, getFullPath(&StoreI, true));
     }
 
     // We check for the case here where we have somethign like
