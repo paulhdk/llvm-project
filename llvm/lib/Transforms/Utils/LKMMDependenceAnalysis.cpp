@@ -1359,6 +1359,23 @@ public:
     return R.second ? &R.first->second : nullptr;
   }
 
+  bool doesInlinePathMatch(Instruction *I, string &ParsedPathToViaFiles) {
+    // Figure out if this is the instruction we originally attached the
+    // annotation to. If it isn't, conintue.
+    auto InlinePath = buildInlineString(I);
+
+    if (!InlinePath.empty() && !ParsedPathToViaFiles.empty()) {
+      // Does ParsedPathTo end with InlinePath?
+      if ((InlinePath.length() > ParsedPathToViaFiles.length()) ||
+          ParsedPathToViaFiles.compare(ParsedPathToViaFiles.length() -
+                                           InlinePath.length(),
+                                       InlinePath.length(), InlinePath) != 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   static bool classof(const BFSCtx *C) { return C->getKind() == CK_Ver; }
 
 private:
@@ -2347,17 +2364,8 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
                                      ? AnnotData[4]
                                      : AnnotData[3];
 
-    // Figure out if this is the instruction we originally attached the
-    // annotation to. If it isn't, conintue.
-    auto InlinePath = buildInlineString(I);
-
-    if (!InlinePath.empty() && !ParsedPathToViaFiles.empty())
-      if ((InlinePath.length() > ParsedPathToViaFiles.length()) ||
-          // Does ParsedPathTo end with InlinePath?
-          ParsedPathToViaFiles.compare(ParsedPathToViaFiles.length() -
-                                           InlinePath.length(),
-                                       InlinePath.length(), InlinePath) != 0)
-        continue;
+    if (Granularity == Strict && !doesInlinePathMatch(I, ParsedPathToViaFiles))
+      continue;
 
     if (ParsedDepHalfTypeStr.find("begin") != string::npos) {
       if (ADBs.find(ParsedID) != ADBs.end())
