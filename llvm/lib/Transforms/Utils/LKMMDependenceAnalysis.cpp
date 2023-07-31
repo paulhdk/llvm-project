@@ -62,6 +62,17 @@ namespace llvm {
 namespace {
 enum DCGran { Strict, Relaxed /*, StrictRelaxed */ };
 
+/// The DepChecker operates at either of two levels of granularity.
+///
+/// 1. Strict: annotates volatile load -> volatile load / volatile store.
+/// Assumes that every dependency is broen until a proof, i.e. a preserved
+/// dependency chain, is found that connects the volatile load of the beginning
+/// with the volatile load / volatile store of the ending.
+///
+/// 2. Relaxed: annotates volatile load -> load.
+/// Assumes every dependency is preserved until a proof, i.e. a broen
+/// dependency chain, is found that doesn't connect the volatile load of the
+/// beginning with any load of an annotated ending.
 cl::opt<DCGran> Granularity(
     cl::desc("Choose DepChecker granularity:"),
     cl::values(clEnumVal(Strict, "Only check at dependency endings."),
@@ -1059,13 +1070,13 @@ public:
   /// \returns true if a check should be made for the instruction. false
   /// otherwise.
   bool shouldCheckInst(Instruction &I) {
-    if (!isa<LoadInst>(I) || !isa<StoreInst>(I))
-      return false;
-    if (Granularity == Relaxed)
-      return !I.isVolatile();
     if (Granularity == Strict)
-      return I.isVolatile();
-    return true;
+      if (isa<LoadInst>(I) || isa<StoreInst>(I))
+        return I.isVolatile();
+    if (Granularity == Relaxed)
+      if (isa<LoadInst>(I))
+        return !I.isVolatile();
+    return false;
   }
 
   /// Checks whether the specified instruction can head a dependency chain.
@@ -1303,7 +1314,7 @@ public:
   VerCtx(BasicBlock *BB, shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs,
          shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs,
          shared_ptr<IDReMap> RemappedIDs, shared_ptr<VerIDSet> VerifiedIDs)
-      : BFSCtx(BB, CK_Ver), BrokenADBs(BrokenADBs), BrokenADEs(BrokenADEs),
+      : BFSCtx(BB, CK_Ver), PendingADBs(BrokenADBs), PendingADEs(BrokenADEs),
         RemappedIDs(RemappedIDs), VerifiedIDs(VerifiedIDs) {}
 
   // Creates a VerCtx for exploring a called function.
@@ -1327,7 +1338,10 @@ public:
   ///  annotation(s).
   void handleDepAnnotations(Instruction *I, MDNode *MDAnnotation);
 
-  void markIDAsVerified(string ParsedID) {
+  /// Stops tracking the dependency chains with the given ID.
+  ///
+  /// \param the ID for the dep chain to stop tracking
+  void stopTrackingADB(string ParsedID) {
     auto DelId = [](auto &ID, auto &Bs, auto &Es, auto &RemappedIDs) {
       Bs->erase(ID);
       Es->erase(ID);
@@ -1339,10 +1353,33 @@ public:
         }
     };
 
-    DelId(ParsedID, BrokenADBs, BrokenADEs, RemappedIDs);
-
+    DelId(ParsedID, PendingADBs, PendingADEs, RemappedIDs);
     VerifiedIDs->insert(ParsedID);
     RemappedIDs->erase(ParsedID);
+  }
+
+  /// This function is called when strict mode finds the proof for a dependency
+  /// being preserved.
+  ///
+  /// \param ParsedID the ID of the dependency chain for which a proof was
+  /// found.
+  void preservedDCProofFound(string ParsedID) {
+    if (!(Granularity == Strict))
+      return;
+    stopTrackingADB(ParsedID);
+  }
+
+  /// This function is called when relaxed mode finds the proof for a dependency
+  /// being broken.
+  ///
+  /// \param ParsedID the ID of the dependency chain for which a proof was
+  /// found.
+  void brokenDCProofFound(string ParsedID) {
+    if (!(Granularity == Relaxed))
+      return;
+    StrictlyBrokenADBs->insert(*PendingADBs->find(ParsedID));
+    StrictlyBrokenADEs->insert(*PendingADEs->find(ParsedID));
+    stopTrackingADB(ParsedID);
   }
 
   void addToOutsideIDs(string ID) { OutsideIDs.insert(ID); }
@@ -1354,7 +1391,7 @@ public:
 
     VADE.setBrokenBy(BrokenBy);
 
-    auto R = BrokenADEs->emplace(VADB.getID(), std::move(VADE));
+    auto R = PendingADEs->emplace(VADB.getID(), std::move(VADE));
 
     return R.second ? &R.first->second : nullptr;
   }
@@ -1380,9 +1417,19 @@ public:
 
 private:
   // Contains all unverified address dependency beginning annotations.
-  shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs;
+  shared_ptr<DepHalfMap<VerAddrDepBeg>> PendingADBs;
   // Contains all unverified address dependency ending annotations.
-  shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs;
+  shared_ptr<DepHalfMap<VerAddrDepEnd>> PendingADEs;
+
+  // Contains all broken address dependency beginning annotations.
+  shared_ptr<DepHalfMap<VerAddrDepBeg>> StrictlyBrokenADBs;
+  // Contains all broken address dependency ending annotations.
+  shared_ptr<DepHalfMap<VerAddrDepEnd>> StrictlyBrokenADEs;
+
+  // Contains all broken address dependency beginning annotations.
+  shared_ptr<DepHalfMap<VerAddrDepBeg>> RelaxedlyBrokenADBs;
+  // Contains all broken address dependency ending annotations.
+  shared_ptr<DepHalfMap<VerAddrDepEnd>> RelaxedlyBrokenADEs;
 
   // All remapped IDs which were discovered from the current root function.
   shared_ptr<IDReMap> RemappedIDs;
@@ -1423,10 +1470,10 @@ private:
 
   // TODO:When can dependencies be delegated?
   bool canBeDelegatedToDynAnalaysis(string const &ID, Instruction *IEnd) {
-    if (ID ==
-            "\n__stm_source_link_drop::1071:9\n__stm_source_link_drop::1085:2->"
-            "pm_runtime_mark_last_busy()\npm_runtime_mark_last_busy::233:"
-            "2" ||
+    if (ID == "\n__stm_source_link_drop::1071:9\n__stm_source_link_drop::"
+              "1085:2->"
+              "pm_runtime_mark_last_busy()\npm_runtime_mark_last_busy::233:"
+              "2" ||
         ID == "\nproj_bdo_rr_addr_dep_begin_simple::41:7\nproj_"
               "bdo_rr_addr_dep_begin_simple::45:7")
       return true;
@@ -1666,7 +1713,7 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
       } else if (auto *VC = dyn_cast<VerCtx>(this)) {
         // Mark dependencies through external or empty functions as trivially
         // verified in VerCtx
-        VC->markIDAsVerified(ID);
+        VC->preservedDCProofFound(ID);
         ++It;
       } else {
         ADBsToBeReturned.push_back(make_shared<OverwrittenADB>(ADB));
@@ -1679,8 +1726,8 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
       if (auto *VC = dyn_cast<VerCtx>(this))
         VC->addToOutsideIDs(ID);
 
-      // All PotAddrDepBeg's which don't run into the function are removed from
-      // ADBs
+      // All PotAddrDepBeg's which don't run into the function are removed
+      // from ADBs
       auto Del = It++;
       ADBs.erase(Del);
     }
@@ -1736,8 +1783,9 @@ void BFSCtx::findDependentArgs(PotAddrDepBeg &ADB, CallBase *CallB,
     // function we cannot analyse, we only assume that it won't break the
     // dependency chain if it is a void intrinsic. In that case, we will clear
     // the DepArgs set, causing no dependency chains to be removed by the
-    // calling function. Otherwise, we will have to assume that it can break the
-    // dependency chain and have to throw it away to avoid false positives.
+    // calling function. Otherwise, we will have to assume that it can break
+    // the dependency chain and have to throw it away to avoid false
+    // positives.
     if (ADB.belongsToDepChain(BB, DCLink(VCmp, DCLevel::PTE))) {
       if (CalledF && !CalledF->isVarArg()) {
         if ((isa<IntrinsicInst>(CallB) &&
@@ -1854,13 +1902,13 @@ void BFSCtx::handleCall(CallBase &CallB) {
   BasicBlock *FirstBB;
 
   // Here, we operate under the assumption that void intrinsics will not
-  // overwrite any function arguments passed to them. They therefore do not hold
-  // the potential to break dep chains and can be safely skipped. Per our
-  // assumption, the same does not apply to non-void intrinsics, simply for the
-  // reason that they might return a dep chain value which the analysis cannot
-  // cach. They are therefore treated like external functions (see below) unless
-  // their function attribute denote that they only read from memory (or don't
-  // access memory at all).
+  // overwrite any function arguments passed to them. They therefore do not
+  // hold the potential to break dep chains and can be safely skipped. Per our
+  // assumption, the same does not apply to non-void intrinsics, simply for
+  // the reason that they might return a dep chain value which the analysis
+  // cannot cach. They are therefore treated like external functions (see
+  // below) unless their function attribute denote that they only read from
+  // memory (or don't access memory at all).
 
   // FIXME: CallI.isIndirectCall() == !CalledF ?
   if (!CalledF || CalledF->hasExternalLinkage() || CalledF->isIntrinsic() ||
@@ -2056,7 +2104,7 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
         ADBs.erase(ID);
       } else if (auto *VC = dyn_cast<VerCtx>(this)) {
         ++ADBPIt;
-        VC->markIDAsVerified(ID);
+        VC->preservedDCProofFound(ID);
       }
       continue;
     }
@@ -2266,6 +2314,7 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
   auto PartOfOutsideIDs = OutsideIDs.find(ID) != OutsideIDs.end();
 
   // FIXME: formatting looks very uncomfortable here
+  //
   // We only add the current annotation as a broken ending if the current
   // BFS has seen the beginning ID. If we were to add unconditionally, we
   // might add endings which aren't actually reachable by the corresponding.
@@ -2274,10 +2323,10 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
     // We have to account for the fact that annotations might get removed
     // for example and therefore we might not have seen the corresponding
     // beginning annotation.
-    if (BrokenADBs->find(ID) == BrokenADBs->end())
+    if (PendingADBs->find(ID) == PendingADBs->end())
       return false;
 
-    auto &VADB = BrokenADBs->at(ID);
+    auto &VADB = PendingADBs->at(ID);
     auto BrokenBy = VerDepHalf::BrokenDC;
     VerAddrDepEnd *BADE = nullptr;
 
@@ -2301,7 +2350,7 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
 
     if (PartOfOutsideIDs) {
       BADE = addBrokenEnding(
-          BrokenADBs->at(ID),
+          PendingADBs->at(ID),
           VerAddrDepEnd(IEnd, ID, getFullPath(IEnd), getFullPath(IEnd, true),
                         ParsedDepHalfID, ParsedPathToViaFiles),
           {}, BrokenBy);
@@ -2309,7 +2358,7 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
 
     if (BADE) {
       if (canBeDelegatedToDynAnalaysis(ID, IEnd)) {
-        auto *IBeg = BrokenADBs->at(ID).getInst();
+        auto *IBeg = PendingADBs->at(ID).getInst();
 
         auto *LLVMCtx = &IEnd->getFunction()->getContext();
         auto IRB = IRBuilder(*LLVMCtx);
@@ -2380,21 +2429,15 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
                                            std::move(DC), I->getParent()));
 
       if (ParsedDepHalfTypeStr.find("address dep") != string::npos)
-        // Assume broken until proven wrong.
-        BrokenADBs->emplace(ParsedID,
-                            VerAddrDepBeg(I, ParsedID, getFullPath(I),
-                                          getFullPath(I, true), ParsedDepHalfID,
-                                          ParsedPathToViaFiles));
+        PendingADBs->emplace(
+            ParsedID,
+            VerAddrDepBeg(I, ParsedID, getFullPath(I), getFullPath(I, true),
+                          ParsedDepHalfID, ParsedPathToViaFiles));
     } else if (ParsedDepHalfTypeStr.find("end") != string::npos) {
-      // If we are able to verify one pair in
-      // {ORIGINAL_ID} \cup REMAPPED_IDS.at(ORIGINAL_ID) x {ORIGINAL_ID}
-      // We consider ORIGINAL_ID verified; there only exists one dependency
-      // in unoptimised IR, hence we only look for one dependency in
-      // optimised IR.
       if (ParsedDepHalfTypeStr.find("address dep") != string::npos) {
         if (wasADBPreserved(ParsedID, I, ParsedDepHalfID,
                             ParsedPathToViaFiles)) {
-          markIDAsVerified(ParsedID);
+          preservedDCProofFound(ParsedID);
           continue;
         }
 
@@ -2402,11 +2445,13 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
           for (auto const &RemappedID : RemappedIDs->at(ParsedID)) {
             if (wasADBPreserved(RemappedID, I, ParsedDepHalfID,
                                 ParsedPathToViaFiles)) {
-              markIDAsVerified(ParsedID);
+              preservedDCProofFound(ParsedID);
               break;
             }
           }
         }
+
+        brokenDCProofFound(ParsedID);
       }
     }
   }
@@ -2425,10 +2470,19 @@ public:
 
 private:
   // Contains all unverified address dependency beginning annotations.
-  shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs;
-
+  shared_ptr<DepHalfMap<VerAddrDepBeg>> PendingADBs;
   // Contains all unverified address dependency ending annotations.
-  shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs;
+  shared_ptr<DepHalfMap<VerAddrDepEnd>> PendingADEs;
+
+  // Contains all broken address dependency beginning annotations.
+  shared_ptr<DepHalfMap<VerAddrDepBeg>> StrictlyBrokenADBs;
+  // Contains all broken address dependency ending annotations.
+  shared_ptr<DepHalfMap<VerAddrDepEnd>> StrictlyBrokenADEs;
+
+  // Contains all broken address dependency beginning annotations.
+  shared_ptr<DepHalfMap<VerAddrDepBeg>> RelaxedlyBrokenADBs;
+  // Contains all broken address dependency ending annotations.
+  shared_ptr<DepHalfMap<VerAddrDepEnd>> RelaxedlyBrokenADEs;
 
   shared_ptr<IDReMap> RemappedIDs;
 
@@ -2440,8 +2494,8 @@ private:
 
   /// Maps the reduced IDs of the same beginning / ending to the shortest
   /// VerAddDepBeg with that ending plus the length of its ID.  An ID is
-  /// reduced if it excludes the path from the beginning to the end and only
-  /// contains the beginning location and the ending location.
+  /// reduced if it excludes the path from the beginning to the end and
+  /// only contains the beginning location and the ending location.
   StringMap<pair<VerAddrDepBeg *, unsigned>> MinLengthPerBegEndPair;
 
   /// Prints broken dependencies.
@@ -2450,7 +2504,7 @@ private:
   void printBrokenDep(VerDepHalf &Beg, VerDepHalf &End, const string &ID);
 
   void onlyPrintShortestDep() {
-    for (auto VADBPIt = BrokenADBs->begin(); VADBPIt != BrokenADBs->end();) {
+    for (auto VADBPIt = PendingADBs->begin(); VADBPIt != PendingADBs->end();) {
       auto RdcdID = VADBPIt->first;
       string OgID = VADBPIt->first;
       auto &VADB = VADBPIt->second;
@@ -2473,19 +2527,19 @@ private:
         MinLengthPerBegEndPair[RdcdID] =
             pair<VerAddrDepBeg *, unsigned>{&VADB, OgID.length()};
 
-        BrokenADBs->erase(OldID);
+        PendingADBs->erase(OldID);
 
-        if (BrokenADEs->find(OldID) != BrokenADEs->end())
-          BrokenADEs->erase(OldID);
+        if (PendingADEs->find(OldID) != PendingADEs->end())
+          PendingADEs->erase(OldID);
 
         ++VADBPIt;
       } else {
         auto Del = VADBPIt++;
 
-        BrokenADBs->erase(Del);
+        PendingADBs->erase(Del);
 
-        if (BrokenADEs->find(OgID) != BrokenADEs->end())
-          BrokenADEs->erase(OgID);
+        if (PendingADEs->find(OgID) != PendingADEs->end())
+          PendingADEs->erase(OgID);
       }
     }
   }
@@ -2537,8 +2591,8 @@ PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
 }
 
 LKMMVerifier::LKMMVerifier()
-    : BrokenADBs(std::make_shared<DepHalfMap<VerAddrDepBeg>>()),
-      BrokenADEs(std::make_shared<DepHalfMap<VerAddrDepEnd>>()),
+    : PendingADBs(std::make_shared<DepHalfMap<VerAddrDepBeg>>()),
+      PendingADEs(std::make_shared<DepHalfMap<VerAddrDepEnd>>()),
       RemappedIDs(std::make_shared<IDReMap>()),
       VerifiedIDs(std::make_shared<unordered_set<string>>()),
       PrintedBrokenIDs(), PrintedModules() {}
@@ -2549,9 +2603,15 @@ PreservedAnalyses LKMMVerifier::run(Module &M, ModuleAnalysisManager &AM) {
       continue;
 
     auto VC =
-        VerCtx(&*F.begin(), BrokenADBs, BrokenADEs, RemappedIDs, VerifiedIDs);
+        VerCtx(&*F.begin(), PendingADBs, PendingADEs, RemappedIDs, VerifiedIDs);
 
     VC.runBFS();
+
+    // All beginnings / endings that couldn't be connected are marked broken.
+    if (Granularity == Strict) {
+      StrictlyBrokenADBs->merge(*PendingADBs);
+      StrictlyBrokenADEs->merge(*PendingADEs);
+    }
   }
 
   onlyPrintShortestDep();
@@ -2590,8 +2650,8 @@ void LKMMVerifier::printBrokenDeps() {
     printBrokenDep(VDB, VDE, ID);
   };
 
-  for (auto &VADBP : *BrokenADBs)
-    CheckDepPair(VADBP, BrokenADEs);
+  for (auto &VADBP : *PendingADBs)
+    CheckDepPair(VADBP, PendingADEs);
 }
 
 void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
