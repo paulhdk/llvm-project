@@ -74,7 +74,7 @@ enum DCGran { Strict, Relaxed /*, StrictRelaxed */ };
 /// dependency chain, is found that doesn't connect the volatile load of the
 /// beginning with any load of an annotated ending.
 cl::opt<DCGran> Granularity(
-    cl::desc("Choose DepChecker granularity:"),
+    "dep-checker-granularity", cl::desc("Choose DepChecker granularity:"),
     cl::values(clEnumVal(Strict, "Only check at dependency endings."),
                clEnumVal(Relaxed, "Only check loads and store on the "
                                   "dependency chain, excluding the ending.")),
@@ -2275,7 +2275,8 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
     for (auto InstIt = InstWithAnnotation->getIterator(),
               InstEnd = InstWithAnnotation->getParent()->end();
          InstIt != InstEnd; ++InstIt)
-      if ((InstIt->getOpcode() == Instruction::Store) &&
+      if (Granularity == Strict &&
+          (InstIt->getOpcode() == Instruction::Store) &&
           (InstIt->getOperand(0) == cast<Value>(InstWithAnnotation))) {
         InstWithAnnotation = &*InstIt;
         break;
@@ -2284,13 +2285,16 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
     // Replace the source of the store to break the dependency chain.
     InstWithAnnotation->setOperand(0, BugVal1);
   } else {
-    if (IOpCode == Instruction::Load) {
+    if (auto *LoadI = dyn_cast<LoadInst>(InstWithAnnotation)) {
       // Update the source of our annotated load to be the global BugVal.
-      InstWithAnnotation->setOperand(0, BugVal1);
+      LoadI->setOperand(0, BugVal1);
       // Set a new name.
       InstWithAnnotation->setName("new_ending");
-    } else
+      if (Granularity == Relaxed)
+        LoadI->setVolatile(false);
+    } else if (auto *StoreI = dyn_cast<StoreInst>(InstWithAnnotation)) {
       InstWithAnnotation->setOperand(1, BugVal1);
+    }
   }
 }
 
@@ -2593,6 +2597,10 @@ PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
 LKMMVerifier::LKMMVerifier()
     : PendingADBs(std::make_shared<DepHalfMap<VerAddrDepBeg>>()),
       PendingADEs(std::make_shared<DepHalfMap<VerAddrDepEnd>>()),
+      StrictlyBrokenADBs(std::make_shared<DepHalfMap<VerAddrDepBeg>>()),
+      StrictlyBrokenADEs(std::make_shared<DepHalfMap<VerAddrDepEnd>>()),
+      RelaxedlyBrokenADBs(std::make_shared<DepHalfMap<VerAddrDepBeg>>()),
+      RelaxedlyBrokenADEs(std::make_shared<DepHalfMap<VerAddrDepEnd>>()),
       RemappedIDs(std::make_shared<IDReMap>()),
       VerifiedIDs(std::make_shared<unordered_set<string>>()),
       PrintedBrokenIDs(), PrintedModules() {}
