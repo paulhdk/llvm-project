@@ -2061,10 +2061,10 @@ bool BFSCtx::storeOverwritesDCValue(StoreInst &StoreI, PotAddrDepBeg &ADB) {
 }
 
 void BFSCtx::visitStoreInst(StoreInst &StoreI) {
-  // FIXME duplicate code in visitLoadInst()
-  if (auto *VC = dyn_cast<VerCtx>(this))
-    if (auto *MDAnnotation = StoreI.getMetadata("annotation"))
-      VC->handleDepAnnotations(&StoreI, MDAnnotation);
+  if (shouldCheckInst(StoreI))
+    if (auto *VC = dyn_cast<VerCtx>(this))
+      if (auto *MDAnnotation = StoreI.getMetadata("annotation"))
+        VC->handleDepAnnotations(&StoreI, MDAnnotation);
 
   // DCLCmp can only run at PTR level as we could otherwise prodcue a
   // 2nd-degree PTE-level value
