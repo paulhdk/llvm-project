@@ -2235,6 +2235,23 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
                          string AnnotationType) {
   Instruction *InstWithAnnotation = nullptr;
 
+  // Make the last volatile load non-volatile.
+  if (Granularity == Relaxed) {
+    if (F->getName().find("proj_bdo_rr") == string::npos)
+      return;
+    LoadInst *IVol = nullptr;
+    for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+      if (auto *LI = dyn_cast<LoadInst>(&*I))
+        if (LI->isVolatile())
+          IVol = LI;
+    }
+    if (IVol)
+      IVol->setVolatile(false);
+    else
+      errs() << "Couldn't find volatile load inst in relaxed mode in function "
+             << F->getName() << ".\n";
+  }
+
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     if (auto *MDN = I->getMetadata("annotation")) {
       for (auto &Op : MDN->operands()) {
