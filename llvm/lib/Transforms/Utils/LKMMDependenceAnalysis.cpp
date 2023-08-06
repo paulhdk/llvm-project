@@ -1295,6 +1295,12 @@ public:
     this->BB = FirstBB;
   }
 
+  /// Make the last volatile load in each "proj_bdo_rr" test case non-volatile.
+  /// Every "proj_bdo_rr" test case then becomes a test case for realxed mode.
+  ///
+  /// \param F any testing function
+  void convertTestForRelaxedMode(Function *F);
+
   /// Inserts the bugs in the testing functions. Will output to errs() if the
   /// desired annotation can't be found.
   ///
@@ -2231,26 +2237,27 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
 // AnnotCtx Implementations
 //===----------------------------------------------------------------------===//
 
+void AnnotCtx::convertTestForRelaxedMode(Function *F) {
+  LoadInst *IVol = nullptr;
+
+  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+    if (auto *LI = dyn_cast<LoadInst>(&*I))
+      if (LI->isVolatile())
+        IVol = LI;
+  }
+
+  if (IVol) {
+    IVol->dump();
+    IVol->setVolatile(false);
+    IVol->dump();
+  } else
+    errs() << "Couldn't find volatile load inst in relaxed mode in function "
+           << F->getName() << ".\n";
+}
+
 void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
                          string AnnotationType) {
   Instruction *InstWithAnnotation = nullptr;
-
-  // Make the last volatile load non-volatile.
-  if (Granularity == Relaxed) {
-    if (F->getName().find("proj_bdo_rr") == string::npos)
-      return;
-    LoadInst *IVol = nullptr;
-    for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-      if (auto *LI = dyn_cast<LoadInst>(&*I))
-        if (LI->isVolatile())
-          IVol = LI;
-    }
-    if (IVol)
-      IVol->setVolatile(false);
-    else
-      errs() << "Couldn't find volatile load inst in relaxed mode in function "
-             << F->getName() << ".\n";
-  }
 
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     if (auto *MDN = I->getMetadata("annotation")) {
@@ -2575,6 +2582,13 @@ PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
       continue;
 
     AnnotCtx AC(&*F.begin());
+
+    if (InjectBugs) {
+      if (!F.hasName())
+        continue;
+      if (F.getName().contains("proj_bdo_rr") && Granularity == Relaxed)
+        AC.convertTestForRelaxedMode(&F);
+    }
 
     // Annotate dependencies.
     AC.runBFS();
