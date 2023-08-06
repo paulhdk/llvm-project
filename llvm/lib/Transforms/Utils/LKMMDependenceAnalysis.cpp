@@ -1381,7 +1381,7 @@ public:
   /// \param ParsedID the ID of the dependency chain for which a proof was
   /// found.
   void brokenDCProofFound(string ParsedID) {
-    if (!(Granularity == Relaxed))
+    if (Granularity != Relaxed)
       return;
     StrictlyBrokenADBs->insert(*PendingADBs->find(ParsedID));
     StrictlyBrokenADEs->insert(*PendingADEs->find(ParsedID));
