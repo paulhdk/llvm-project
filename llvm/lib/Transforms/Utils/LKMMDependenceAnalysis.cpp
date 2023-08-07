@@ -2535,12 +2535,14 @@ private:
   StringMap<pair<VerAddrDepBeg *, unsigned>> MinLengthPerBegEndPair;
 
   /// Prints broken dependencies.
-  void printBrokenDeps();
+  void printBrokenDeps(shared_ptr<DepHalfMap<VerAddrDepBeg>> BrknADBs,
+                       shared_ptr<DepHalfMap<VerAddrDepEnd>> BrknADEs);
 
   void printBrokenDep(VerDepHalf &Beg, VerDepHalf &End, const string &ID);
 
-  void onlyPrintShortestDep() {
-    for (auto VADBPIt = PendingADBs->begin(); VADBPIt != PendingADBs->end();) {
+  void onlyPrintShortestDep(shared_ptr<DepHalfMap<VerAddrDepBeg>> BrknADBs,
+                            shared_ptr<DepHalfMap<VerAddrDepEnd>> BrknADEs) {
+    for (auto VADBPIt = BrknADBs->begin(); VADBPIt != BrknADBs->end();) {
       auto RdcdID = VADBPIt->first;
       string OgID = VADBPIt->first;
       auto &VADB = VADBPIt->second;
@@ -2563,19 +2565,19 @@ private:
         MinLengthPerBegEndPair[RdcdID] =
             pair<VerAddrDepBeg *, unsigned>{&VADB, OgID.length()};
 
-        PendingADBs->erase(OldID);
+        BrknADBs->erase(OldID);
 
-        if (PendingADEs->find(OldID) != PendingADEs->end())
-          PendingADEs->erase(OldID);
+        if (BrknADEs->find(OldID) != BrknADEs->end())
+          BrknADEs->erase(OldID);
 
         ++VADBPIt;
       } else {
         auto Del = VADBPIt++;
 
-        PendingADBs->erase(Del);
+        BrknADBs->erase(Del);
 
-        if (PendingADEs->find(OgID) != PendingADEs->end())
-          PendingADEs->erase(OgID);
+        if (BrknADEs->find(OgID) != BrknADEs->end())
+          BrknADEs->erase(OgID);
       }
     }
   }
@@ -2662,14 +2664,19 @@ PreservedAnalyses LKMMVerifier::run(Module &M, ModuleAnalysisManager &AM) {
     }
   }
 
-  onlyPrintShortestDep();
-
-  printBrokenDeps();
-
+  if (Granularity == Strict) {
+    onlyPrintShortestDep(StrictlyBrokenADBs, StrictlyBrokenADEs);
+    printBrokenDeps(StrictlyBrokenADBs, StrictlyBrokenADEs);
+  } else if (Granularity == Relaxed) {
+    onlyPrintShortestDep(RelaxedlyBrokenADBs, RelaxedlyBrokenADEs);
+    printBrokenDeps(RelaxedlyBrokenADBs, RelaxedlyBrokenADEs);
+  }
   return PreservedAnalyses::all();
 }
 
-void LKMMVerifier::printBrokenDeps() {
+void LKMMVerifier::printBrokenDeps(
+    shared_ptr<DepHalfMap<VerAddrDepBeg>> BrknADBs,
+    shared_ptr<DepHalfMap<VerAddrDepEnd>> BrknADEs) {
   auto CheckDepPair = [this](auto &P, auto &E) {
     auto ID = P.first;
 
@@ -2698,8 +2705,8 @@ void LKMMVerifier::printBrokenDeps() {
     printBrokenDep(VDB, VDE, ID);
   };
 
-  for (auto &VADBP : *PendingADBs)
-    CheckDepPair(VADBP, PendingADEs);
+  for (auto &VADBP : *BrknADBs)
+    CheckDepPair(VADBP, BrknADEs);
 }
 
 void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
