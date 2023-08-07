@@ -2611,8 +2611,13 @@ PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
 
       // Insert bugs if the BFS just annotated a testing function.
       if (FName.contains("proj_bdo_rr_addr_dep_begin") ||
-          FName.contains("proj_bdo_rw_addr_dep_begin") ||
           FName.contains("proj_bdo_ctrl_dep_begin")) {
+        AC.insertBug(&F, Instruction::Load, "dep begin");
+        InsertedBugs = true;
+      }
+
+      if (Granularity == Strict &&
+          FName.contains("proj_bdo_rw_addr_dep_begin")) {
         AC.insertBug(&F, Instruction::Load, "dep begin");
         InsertedBugs = true;
       }
@@ -2624,8 +2629,9 @@ PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
       }
 
       // Break read -> write addr dep and ctrl dep endings.
-      else if (FName.contains("proj_bdo_rw_addr_dep_end") ||
-               FName.contains("proj_bdo_ctrl_dep_end")) {
+      else if (Granularity == Strict &&
+               (FName.contains("proj_bdo_rw_addr_dep_end") ||
+                FName.contains("proj_bdo_ctrl_dep_end"))) {
         AC.insertBug(&F, Instruction::Store, "dep end");
         InsertedBugs = true;
       }
