@@ -1317,11 +1317,19 @@ public:
 
 class VerCtx : public BFSCtx {
 public:
-  VerCtx(BasicBlock *BB, shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs,
-         shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs,
+  VerCtx(BasicBlock *BB, shared_ptr<DepHalfMap<VerAddrDepBeg>> PendingADBs,
+         shared_ptr<DepHalfMap<VerAddrDepEnd>> PendingADEs,
+         shared_ptr<DepHalfMap<VerAddrDepBeg>> StrictlyBrokenADBs,
+         shared_ptr<DepHalfMap<VerAddrDepEnd>> StrictlyBrokenADEs,
+         shared_ptr<DepHalfMap<VerAddrDepBeg>> RelaxedlyBrokenADBs,
+         shared_ptr<DepHalfMap<VerAddrDepEnd>> RelaxedlyBrokenADEs,
          shared_ptr<IDReMap> RemappedIDs, shared_ptr<VerIDSet> VerifiedIDs)
-      : BFSCtx(BB, CK_Ver), PendingADBs(BrokenADBs), PendingADEs(BrokenADEs),
-        RemappedIDs(RemappedIDs), VerifiedIDs(VerifiedIDs) {}
+      : BFSCtx(BB, CK_Ver), PendingADBs(PendingADBs), PendingADEs(PendingADEs),
+        StrictlyBrokenADBs(StrictlyBrokenADBs),
+        StrictlyBrokenADEs(StrictlyBrokenADEs),
+        RelaxedlyBrokenADBs(RelaxedlyBrokenADBs),
+        RelaxedlyBrokenADEs(RelaxedlyBrokenADEs), RemappedIDs(RemappedIDs),
+        VerifiedIDs(VerifiedIDs) {}
 
   // Creates a VerCtx for exploring a called function.
   // FIXME Nearly identical to AnnotCtx's copy constructor. Can we template
@@ -2641,8 +2649,9 @@ PreservedAnalyses LKMMVerifier::run(Module &M, ModuleAnalysisManager &AM) {
     if (F.empty())
       continue;
 
-    auto VC =
-        VerCtx(&*F.begin(), PendingADBs, PendingADEs, RemappedIDs, VerifiedIDs);
+    auto VC = VerCtx(&*F.begin(), PendingADBs, PendingADEs, StrictlyBrokenADBs,
+                     StrictlyBrokenADEs, RelaxedlyBrokenADBs,
+                     RelaxedlyBrokenADEs, RemappedIDs, VerifiedIDs);
 
     VC.runBFS();
 
