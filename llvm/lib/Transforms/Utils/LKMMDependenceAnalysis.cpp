@@ -2249,18 +2249,15 @@ void AnnotCtx::convertTestForRelaxedMode(Function *F) {
   LoadInst *IVol = nullptr;
 
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-    if (auto *LI = dyn_cast<LoadInst>(&*I))
-      if (LI->isVolatile())
-        IVol = LI;
+    if (auto *LI = dyn_cast<LoadInst>(&*I)) {
+      if (LI->isVolatile()) {
+        if (!IVol)
+          IVol = LI;
+        else
+          LI->setVolatile(false);
+      }
+    }
   }
-
-  if (IVol) {
-    IVol->dump();
-    IVol->setVolatile(false);
-    IVol->dump();
-  } else
-    errs() << "Couldn't find volatile load inst in relaxed mode in function "
-           << F->getName() << ".\n";
 }
 
 void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
