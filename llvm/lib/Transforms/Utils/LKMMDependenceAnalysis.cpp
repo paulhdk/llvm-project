@@ -1378,6 +1378,34 @@ private:
       return true;
     return false;
   }
+
+  void addPCSectionEntriesForDepOrdering(string ID, Instruction *IEnd,
+                                         VerAddrDepEnd *BADE) {
+    errs() << "Adding PC section\n";
+    auto *IBeg = BrokenADBs->at(ID).getInst();
+
+    auto *LLVMCtx = &IEnd->getFunction()->getContext();
+    auto IRB = IRBuilder(*LLVMCtx);
+
+    size_t H = hash_value(ID);
+    auto *IDConst = IRB.getInt64(H);
+
+    SmallVector<MDBuilder::PCSection, 1> PCs1;
+    PCs1.push_back(MDBuilder::PCSection{PCsADBStr, {IDConst}});
+
+    SmallVector<MDBuilder::PCSection, 1> PCs2;
+    PCs2.push_back(MDBuilder::PCSection{PCsADEStr, {IDConst}});
+
+    auto MDB = MDBuilder(*LLVMCtx);
+
+    IBeg->setMetadata(LLVMContext::MD_pcsections, MDB.createPCSections(PCs1));
+    IEnd->setMetadata(LLVMContext::MD_pcsections, MDB.createPCSections(PCs2));
+
+    // FIXME: This guard is only necessary for debugging. It should probably be
+    // removed in the final version.
+    if (BADE)
+      BADE->delegateToDynAnalysis();
+  }
 };
 
 //===----------------------------------------------------------------------===//
@@ -2222,6 +2250,11 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
     auto BrokenBy = VerDepHalf::BrokenDC;
     VerAddrDepEnd *BADE = nullptr;
 
+    // FIXME: This call is only necessary for debugging since it will delegate
+    // non-broken dependencies.
+    if (canBeDelegatedToDynAnalaysis(ID, IEnd))
+      addPCSectionEntriesForDepOrdering(ID, IEnd, BADE);
+
     if (PartOfADBs) {
       auto &ADB = ADBs.at(ID);
       // Check for fully broken dependency chain
@@ -2249,30 +2282,8 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
     }
 
     if (BADE) {
-      if (canBeDelegatedToDynAnalaysis(ID, IEnd)) {
-        auto *IBeg = BrokenADBs->at(ID).getInst();
-
-        auto *LLVMCtx = &IEnd->getFunction()->getContext();
-        auto IRB = IRBuilder(*LLVMCtx);
-
-        size_t H = hash_value(ID);
-        auto *IDConst = IRB.getInt64(H);
-
-        SmallVector<MDBuilder::PCSection, 1> PCs1;
-        PCs1.push_back(MDBuilder::PCSection{PCsADBStr, {IDConst}});
-
-        SmallVector<MDBuilder::PCSection, 1> PCs2;
-        PCs2.push_back(MDBuilder::PCSection{PCsADEStr, {IDConst}});
-
-        auto MDB = MDBuilder(*LLVMCtx);
-
-        IBeg->setMetadata(LLVMContext::MD_pcsections,
-                          MDB.createPCSections(PCs1));
-        IEnd->setMetadata(LLVMContext::MD_pcsections,
-                          MDB.createPCSections(PCs2));
-
-        BADE->delegateToDynAnalysis();
-      }
+      if (canBeDelegatedToDynAnalaysis(ID, IEnd))
+        addPCSectionEntriesForDepOrdering(ID, IEnd, BADE);
     }
   }
   return false;
