@@ -1369,7 +1369,7 @@ private:
 
   // TODO:When can dependencies be delegated?
   bool canBeDelegatedToDynAnalaysis(string const &ID, Instruction *IEnd) {
-    if (ID.find("proj_bdo_rr_addr_dep_begin_simple::47:7") != string::npos)
+    if (ID.find("proj_bdo_rr_addr_dep_begin_simple") != string::npos)
       return true;
     return false;
   }
