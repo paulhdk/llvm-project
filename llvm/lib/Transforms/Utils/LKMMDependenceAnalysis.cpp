@@ -20,7 +20,7 @@
 
 #include "llvm/Transforms/Utils/LKMMDependenceAnalysis.h"
 #include "llvm/ADT/DenseMapInfo.h"
-#include "llvm/ADT/Optional.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/CFG.h"
@@ -29,12 +29,14 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ValueMap.h"
@@ -57,6 +59,7 @@
 // FIXME: Pass by const reference for read access, pointer for RW access
 
 namespace llvm {
+namespace {
 static cl::opt<bool> InjectBugs(
     "lkmm-enable-tests",
     cl::desc("Enable the LKMM dependency checker tests. Requires the tests "
@@ -68,11 +71,11 @@ static cl::opt<bool> FullToPartialOpt(
     cl::desc("Enable warnings for LKMM addr dependencies based on full to "
              "partial addr dependency conversion"),
     cl::Hidden, cl::init(false));
+} // namespace
 
 // Avoid the std:: qualifier if possible
 using std::list;
 using std::make_shared;
-using std::move;
 using std::pair;
 using std::shared_ptr;
 using std::string;
@@ -82,6 +85,8 @@ using std::unordered_set;
 
 constexpr StringRef ADBStr = "LKMMDep: address dep begin";
 constexpr StringRef ADEStr = "LKMMDep: address dep end";
+constexpr StringRef PCsADBStr = "AddrDepBeginnings";
+constexpr StringRef PCsADEStr = "AddrDepEndings";
 
 // FIXME Is there a more elegant way of dealing with duplicate IDs
 // (preferably getting eliminating the problem all together)?
@@ -309,6 +314,8 @@ protected:
 
   string PathFrom;
 
+  bool Delegated;
+
   DepHalf(Instruction *I, string ID, string PathToViaFiles, DepKind Kind)
       : I(I), ID(ID), PathToViaFiles(PathToViaFiles), PathFrom("\n"),
         Kind(Kind){};
@@ -506,8 +513,8 @@ protected:
              string PathToViaFiles, string ParsedDepHalfID,
              string ParsedPathToViaFiles, DepKind Kind)
       : DepHalf(I, DepHalfID, PathToViaFiles, Kind), ParsedID(ParsedID),
-        ParsedDepHalfID(ParsedDepHalfID), ParsedPathToViaFiles{
-                                              ParsedPathToViaFiles} {}
+        ParsedDepHalfID(ParsedDepHalfID),
+        ParsedPathToViaFiles{ParsedPathToViaFiles} {}
 
 private:
   // Shows how this dependency got broken
@@ -550,11 +557,19 @@ public:
                 string PathToViaFiles, string ParsedDepHalfID,
                 string ParsedPathToViaFiles)
       : VerDepHalf(I, ParsedID, DepHalfID, PathToViaFiles, ParsedDepHalfID,
-                   ParsedPathToViaFiles, DK_VerAddrEnd) {}
+                   ParsedPathToViaFiles, DK_VerAddrEnd),
+        Delegated{false} {}
+
+  void delegateToDynAnalysis() { Delegated = true; }
+
+  bool hasBeenDelegatedToDynAnalysis() { return Delegated; }
 
   static bool classof(const DepHalf *VDH) {
     return VDH->getKind() == DK_VerAddrEnd;
   }
+
+private:
+  bool Delegated;
 };
 
 struct InterprocRetAddrDep {
@@ -1295,13 +1310,16 @@ public:
 
   void addToOutsideIDs(string ID) { OutsideIDs.insert(ID); }
 
-  void addBrokenEnding(VerAddrDepBeg VADB, VerAddrDepEnd VADE, DepChain DC,
-                       VerDepHalf::BrokenByType BrokenBy) {
+  VerAddrDepEnd *addBrokenEnding(VerAddrDepBeg VADB, VerAddrDepEnd VADE,
+                                 DepChain DC,
+                                 VerDepHalf::BrokenByType BrokenBy) {
     VADB.setDCP(DC);
 
     VADE.setBrokenBy(BrokenBy);
 
-    BrokenADEs->emplace(VADB.getID(), move(VADE));
+    auto R = BrokenADEs->emplace(VADB.getID(), std::move(VADE));
+
+    return R.second ? &R.first->second : nullptr;
   }
 
   static bool classof(const BFSCtx *C) { return C->getKind() == CK_Ver; }
@@ -1331,8 +1349,8 @@ private:
   ///  \p Inst.
   ///
   /// \returns true if the address dependency could be verified.
-  bool isADBBroken(string const &ID, Instruction *I, string &ParsedPathTo,
-                   string &ParsedPathToViaFiles);
+  bool wasADBPreserved(string const &ID, Instruction *IEnd,
+                       string &ParsedPathTo, string &ParsedPathToViaFiles);
 
   /// Responsible for updating an ID if the verification pass has encountered
   /// it before. Will add the updated ID to \p RemappedIDs.
@@ -1347,6 +1365,41 @@ private:
       RemappedIDs->at(ID).insert(ID + "-#" + to_string(S + 1));
       ID = ID + "-#" + to_string(S + 1);
     }
+  }
+
+  // TODO:When can dependencies be delegated?
+  bool canBeDelegatedToDynAnalaysis(string const &ID, Instruction *IEnd) {
+    if (ID.find("proj_bdo_rr_addr_dep_begin_simple") != string::npos)
+      return true;
+    return false;
+  }
+
+  void addPCSectionEntriesForDepOrdering(string ID, Instruction *IEnd,
+                                         VerAddrDepEnd *BADE) {
+    errs() << "Adding PC section\n";
+    auto *IBeg = BrokenADBs->at(ID).getInst();
+
+    auto *LLVMCtx = &IEnd->getFunction()->getContext();
+    auto IRB = IRBuilder(*LLVMCtx);
+
+    size_t H = hash_value(ID);
+    auto *IDConst = IRB.getInt64(H);
+
+    SmallVector<MDBuilder::PCSection, 1> PCs1;
+    PCs1.push_back(MDBuilder::PCSection{PCsADBStr, {IDConst}});
+
+    SmallVector<MDBuilder::PCSection, 1> PCs2;
+    PCs2.push_back(MDBuilder::PCSection{PCsADEStr, {IDConst}});
+
+    auto MDB = MDBuilder(*LLVMCtx);
+
+    IBeg->setMetadata(LLVMContext::MD_pcsections, MDB.createPCSections(PCs1));
+    IEnd->setMetadata(LLVMContext::MD_pcsections, MDB.createPCSections(PCs2));
+
+    // FIXME: This guard is only necessary for debugging. It should probably be
+    // removed in the final version.
+    if (BADE)
+      BADE->delegateToDynAnalysis();
   }
 };
 
@@ -1466,20 +1519,21 @@ bool PotAddrDepBeg::belongsToDepChain(BasicBlock *BB, DCLink DCLCmp) {
 
 void PotAddrDepBeg::addAddrDep(string ID2, string PathToViaFiles2,
                                Instruction *I2) const {
+  // TODO: refactor into generateIDs(), addAnnotations(), addPCs()
   auto DepID = getInstLocString(I) + PathFrom + ID2;
 
-  auto BeginAnnotation = ADBStr.str() + ",\n" + DepID + ",\n" + getID() + ",\n";
-  auto EndAnnotation = ADEStr.str() + ",\n" + DepID + ",\n" + ID2 + ",\n";
+  auto BegAnnotStr = ADBStr.str() + ",\n" + DepID + ",\n" + getID() + ",\n";
+  auto EndAnnotStr = ADEStr.str() + ",\n" + DepID + ",\n" + ID2 + ",\n";
 
   // We only annotate if we haven't annotated this exact dependency before.
-  if (hasAnnotation(I, BeginAnnotation) && hasAnnotation(I2, EndAnnotation))
+  if (hasAnnotation(I, BegAnnotStr) && hasAnnotation(I2, EndAnnotStr))
     return;
 
-  BeginAnnotation += getPathToViaFiles() + ";";
-  EndAnnotation += PathToViaFiles2 + ",\n" + ";";
+  BegAnnotStr += getPathToViaFiles() + ";";
+  EndAnnotStr += PathToViaFiles2 + ",\n" + ";";
 
-  I->addAnnotationMetadata(BeginAnnotation);
-  I2->addAnnotationMetadata(EndAnnotation);
+  I->addAnnotationMetadata(BegAnnotStr);
+  I2->addAnnotationMetadata(EndAnnotStr);
 }
 
 bool PotAddrDepBeg::depChainsShareLink(
@@ -1610,12 +1664,12 @@ InterprocBFSRes BFSCtx::runInterprocBFS(BasicBlock *FirstBB, CallBase *CallB) {
   if (auto *AC = dyn_cast<AnnotCtx>(this)) {
     AnnotCtx InterprocCtx = AnnotCtx(*AC, FirstBB, CallB);
     InterprocCtx.runBFS();
-    return InterprocBFSRes(move(InterprocCtx.ADBsToBeReturned));
+    return InterprocBFSRes(std::move(InterprocCtx.ADBsToBeReturned));
   }
   if (auto *VC = dyn_cast<VerCtx>(this)) {
     VerCtx InterprocCtx = VerCtx(*VC, FirstBB, CallB);
     InterprocCtx.runBFS();
-    return InterprocBFSRes(move(InterprocCtx.ADBsToBeReturned));
+    return InterprocBFSRes(std::move(InterprocCtx.ADBsToBeReturned));
   }
   llvm_unreachable("Called runInterprocBFS() with no BFSCtx child.");
 }
@@ -1635,17 +1689,27 @@ void BFSCtx::findDependentArgs(PotAddrDepBeg &ADB, CallBase *CallB,
   for (unsigned Ind = 0; Ind < CallB->arg_size(); ++Ind) {
     auto *VCmp = CallB->getArgOperand(Ind);
 
-    // FIXME: Can this be made nicer?
     if (ADB.belongsToDepChain(BB, DCLink(VCmp, DCLevel::PTR)))
       if (CalledF)
         if (!CalledF->isVarArg())
           DepArgs->emplace_back(Ind, DCLevel::PTR);
 
-    // FIXME: Basically duplicate
-    if (ADB.belongsToDepChain(BB, DCLink(VCmp, DCLevel::PTE)))
-      if (CalledF)
-        if (!CalledF->isVarArg())
-          DepArgs->emplace_back(Ind, DCLevel::PTE);
+    // If we discover that a PTE-level value of a dependency chain runs into a
+    // function we cannot analyse, we only assume that it won't break the
+    // dependency chain if it is a void intrinsic. In that case, we will clear
+    // the DepArgs set, causing no dependency chains to be removed by the
+    // calling function. Otherwise, we will have to assume that it can break the
+    // dependency chain and have to throw it away to avoid false positives.
+    if (ADB.belongsToDepChain(BB, DCLink(VCmp, DCLevel::PTE))) {
+      if (CalledF && !CalledF->isVarArg()) {
+        if ((isa<IntrinsicInst>(CallB) &&
+             CalledF->getReturnType()->isVoidTy())) {
+          DepArgs->clear();
+          return;
+        }
+        DepArgs->emplace_back(Ind, DCLevel::PTE);
+      }
+    }
   }
 }
 
@@ -1761,19 +1825,11 @@ void BFSCtx::handleCall(CallBase &CallB) {
   // access memory at all).
 
   // FIXME: CallI.isIndirectCall() == !CalledF ?
-  if (!CalledF) {
+  if (!CalledF || CalledF->hasExternalLinkage() || CalledF->isIntrinsic() ||
+      CalledF->isVarArg() || CalledF->empty() || CallB.isIndirectCall())
     FirstBB = nullptr;
-  } else if (CalledF->hasExternalLinkage() || CalledF->isIntrinsic() ||
-             CalledF->isVarArg() || CalledF->empty() ||
-             CallB.isIndirectCall()) {
-    if (CalledF->onlyReadsMemory() ||
-        (isa<IntrinsicInst>(CallB) && CalledF->getReturnType()->isVoidTy())) {
-      return;
-    }
-    FirstBB = nullptr;
-  } else {
+  else
     FirstBB = &*CalledF->begin();
-  }
 
   InterprocBFSRes Res;
 
@@ -1808,16 +1864,14 @@ void BFSCtx::handleCall(CallBase &CallB) {
       ADB.addStepToPathFrom(&CallB, true);
 
       if (InheritedADBs.find(ID) != InheritedADBs.end())
-        ADBsToBeReturned.push_back(move(IRetAD));
+        ADBsToBeReturned.push_back(std::move(IRetAD));
 
       ADBs.erase(ID);
     } else if (auto *RADB = dyn_cast<ReturnedADB>(IRetAD.get())) {
       auto &Lvl = RADB->Lvl;
       if (Lvl != DCLevel::NORET) {
-        if (RADB->DiscoveredInInterproc ||
-            (ADBs.find(ID) == ADBs.end() &&
-             InheritedADBs.find(ID) != InheritedADBs.end())) {
-          ADBs.emplace(ID, move(RADB->ADB));
+        if (ADBs.find(ID) == ADBs.end()) {
+          ADBs.emplace(ID, std::move(RADB->ADB));
           ADBs.at(ID).resetDCM(BB);
         }
 
@@ -1852,7 +1906,7 @@ void BFSCtx::handleCall(CallBase &CallB) {
         // if we are verifying and continue.
         if (auto *VC = dyn_cast<VerCtx>(this)) {
           VC->addToOutsideIDs(RADB->ADB.getID());
-          ADBsToBeReturned.push_back(move(IRetAD));
+          ADBsToBeReturned.push_back(std::move(IRetAD));
         }
       }
     }
@@ -1901,7 +1955,7 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
     DC.insert(DCLink{LoadVal, DCLevel::PTR});
 
     if (!ADBs.emplace(ID, PotAddrDepBeg(&LoadI, ID, getFullPath(&LoadI, true),
-                                        move(DC), LoadI.getParent()))
+                                        std::move(DC), LoadI.getParent()))
              .second)
       errs() << "Couldn't insert new PotAddrDepBeg";
   }
@@ -2083,9 +2137,9 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
     else if (RetAtPTE)
       RADB->Lvl = DCLevel::PTE;
     else if (!ADBDiscoverdInThisF)
-      return;
+      continue;
 
-    ADBsToBeReturned.push_back(move(RADB));
+    ADBsToBeReturned.push_back(std::move(RADB));
   }
 }
 
@@ -2160,14 +2214,14 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
 // VerCtx Implementations
 //===----------------------------------------------------------------------===//
 
-bool VerCtx::isADBBroken(string const &ID, Instruction *I,
-                         string &ParsedDepHalfID,
-                         string &ParsedPathToViaFiles) {
+bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
+                             string &ParsedDepHalfID,
+                             string &ParsedPathToViaFiles) {
   auto DCLCmp = DCLink(nullptr, DCLevel::PTR);
 
-  if (auto *SI = dyn_cast<StoreInst>(I))
+  if (auto *SI = dyn_cast<StoreInst>(IEnd))
     DCLCmp.Val = SI->getPointerOperand();
-  else if (auto *LI = dyn_cast<LoadInst>(I))
+  else if (auto *LI = dyn_cast<LoadInst>(IEnd))
     DCLCmp.Val = LI->getPointerOperand();
   else
     llvm_unreachable("Non-store or non-load instruction in handleAddrDepID().");
@@ -2189,6 +2243,12 @@ bool VerCtx::isADBBroken(string const &ID, Instruction *I,
 
     auto &VADB = BrokenADBs->at(ID);
     auto BrokenBy = VerDepHalf::BrokenDC;
+    VerAddrDepEnd *BADE = nullptr;
+
+    // FIXME: This call is only necessary for debugging since it will delegate
+    // non-broken dependencies.
+    if (canBeDelegatedToDynAnalaysis(ID, IEnd))
+      addPCSectionEntriesForDepOrdering(ID, IEnd, BADE);
 
     if (PartOfADBs) {
       auto &ADB = ADBs.at(ID);
@@ -2199,20 +2259,26 @@ bool VerCtx::isADBBroken(string const &ID, Instruction *I,
         if (auto *DCU = ADB.getDCsAt(BB))
           DC = *DCU;
 
-        addBrokenEnding(VADB,
-                        VerAddrDepEnd(I, ID, getFullPath(I),
-                                      getFullPath(I, true), ParsedDepHalfID,
-                                      ParsedPathToViaFiles),
-                        DC, BrokenBy);
+        BADE = addBrokenEnding(
+            VADB,
+            VerAddrDepEnd(IEnd, ID, getFullPath(IEnd), getFullPath(IEnd, true),
+                          ParsedDepHalfID, ParsedPathToViaFiles),
+            DC, BrokenBy);
       } else
         return true;
     }
 
     if (PartOfOutsideIDs) {
-      addBrokenEnding(BrokenADBs->at(ID),
-                      VerAddrDepEnd(I, ID, getFullPath(I), getFullPath(I, true),
-                                    ParsedDepHalfID, ParsedPathToViaFiles),
-                      {}, BrokenBy);
+      BADE = addBrokenEnding(
+          BrokenADBs->at(ID),
+          VerAddrDepEnd(IEnd, ID, getFullPath(IEnd), getFullPath(IEnd, true),
+                        ParsedDepHalfID, ParsedPathToViaFiles),
+          {}, BrokenBy);
+    }
+
+    if (BADE) {
+      if (canBeDelegatedToDynAnalaysis(ID, IEnd))
+        addPCSectionEntriesForDepOrdering(ID, IEnd, BADE);
     }
   }
   return false;
@@ -2267,7 +2333,7 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       DepChain DC;
       DC.insert(DCLink(I, DCLevel::PTR));
       ADBs.emplace(ParsedID, PotAddrDepBeg(I, ParsedID, getFullPath(I, true),
-                                           move(DC), I->getParent()));
+                                           std::move(DC), I->getParent()));
 
       if (ParsedDepHalfTypeStr.find("address dep") != string::npos)
         // Assume broken until proven wrong.
@@ -2282,15 +2348,16 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       // in unoptimised IR, hence we only look for one dependency in
       // optimised IR.
       if (ParsedDepHalfTypeStr.find("address dep") != string::npos) {
-        if (isADBBroken(ParsedID, I, ParsedDepHalfID, ParsedPathToViaFiles)) {
+        if (wasADBPreserved(ParsedID, I, ParsedDepHalfID,
+                            ParsedPathToViaFiles)) {
           markIDAsVerified(ParsedID);
           continue;
         }
 
         if (RemappedIDs->find(ParsedID) != RemappedIDs->end()) {
           for (auto const &RemappedID : RemappedIDs->at(ParsedID)) {
-            if (isADBBroken(RemappedID, I, ParsedDepHalfID,
-                            ParsedPathToViaFiles)) {
+            if (wasADBPreserved(RemappedID, I, ParsedDepHalfID,
+                                ParsedPathToViaFiles)) {
               markIDAsVerified(ParsedID);
               break;
             }
@@ -2469,6 +2536,9 @@ void LKMMVerifier::printBrokenDeps() {
 
     auto &VDE = VDEP->second;
 
+    if (VDE.hasBeenDelegatedToDynAnalysis())
+      return;
+
     if (PrintedBrokenIDs.find(ID) != PrintedBrokenIDs.end())
       return;
 
@@ -2490,7 +2560,7 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
     llvm_unreachable("Invalid beginning type when printing broken dependency.");
 
   errs() << "//===--------------------------Broken "
-            "Dependency---------------------------===//\n";
+            "Dependency--------------------------===//\n";
 
   errs() << DepKindStr << " with ID: " << ID << "\n\n";
 
@@ -2558,7 +2628,7 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
 #undef DEBUG_TYPE
 
   errs() << "//"
-            "===-----------------------------------------------------------"
+            "===----------------------------------------------------------"
             "----"
             "-------===//\n\n";
 }
