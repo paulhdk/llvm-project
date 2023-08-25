@@ -29,6 +29,7 @@ pkgs.llvmPackages_latest.stdenv.mkDerivation {
   hardeningDisable = [ "all" ];
   shellHook = ''
     export PYTHONPATH='lldb -P'
+    export LD_LIBRARY_FLAGS="${pkgs.llvmPackages_latest.stdenv.cc.cc.lib}/lib:$LD_LIBRARY_FLAGS"
   '';
   PATH_TO_CLANG = "${pkgs.llvmPackages_latest.stdenv.cc}/bin/clang++";
   # FIXME why is this not included?
