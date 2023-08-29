@@ -1257,8 +1257,8 @@ public:
   /// \param AnnotationType the type of annotation to break, i.e. (addr +
   /// ctrl)
   ///  dep (beginning + ending).
-  void insertBug(Function *F, Instruction::MemoryOps IOpCode,
-                 string AnnotationType);
+  void breakDepChain(Function *F, Instruction::MemoryOps IOpCode,
+                     string AnnotationType);
 };
 
 class VerCtx : public BFSCtx {
@@ -2147,8 +2147,8 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
 // AnnotCtx Implementations
 //===----------------------------------------------------------------------===//
 
-void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
-                         string AnnotationType) {
+void AnnotCtx::breakDepChain(Function *F, Instruction::MemoryOps IOpCode,
+                             string AnnotationType) {
   Instruction *InstWithAnnotation = nullptr;
 
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
@@ -2470,20 +2470,20 @@ PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
       if (FName.contains("proj_bdo_rr_addr_dep_begin") ||
           FName.contains("proj_bdo_rw_addr_dep_begin") ||
           FName.contains("proj_bdo_ctrl_dep_begin")) {
-        AC.insertBug(&F, Instruction::Load, "dep begin");
+        AC.breakDepChain(&F, Instruction::Load, "dep begin");
         InsertedBugs = true;
       }
 
       // Break read -> read addr dep endings.
       else if (FName.contains("proj_bdo_rr_addr_dep_end")) {
-        AC.insertBug(&F, Instruction::Load, "dep end");
+        AC.breakDepChain(&F, Instruction::Load, "dep end");
         InsertedBugs = true;
       }
 
       // Break read -> write addr dep and ctrl dep endings.
       else if (FName.contains("proj_bdo_rw_addr_dep_end") ||
                FName.contains("proj_bdo_ctrl_dep_end")) {
-        AC.insertBug(&F, Instruction::Store, "dep end");
+        AC.breakDepChain(&F, Instruction::Store, "dep end");
         InsertedBugs = true;
       }
     }
