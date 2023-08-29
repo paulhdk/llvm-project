@@ -1259,6 +1259,14 @@ public:
   ///  dep (beginning + ending).
   void breakDepChain(Function *F, Instruction::MemoryOps IOpCode,
                      string AnnotationType);
+
+  /// Replaces the first call to `proj_bdo_ddd_max_func` with a call to a
+  /// semantically equivalent function which cannot be traversed by the
+  /// StatDepChecker.
+  ///
+  /// \param F the function where a call should be replaced
+  /// TODO: type parameter
+  void insertUntraversableCall(Function *F);
 };
 
 class VerCtx : public BFSCtx {
@@ -2210,6 +2218,14 @@ void AnnotCtx::breakDepChain(Function *F, Instruction::MemoryOps IOpCode,
   }
 }
 
+void AnnotCtx::insertUntraversableCall(Function *F) {
+  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+    if (auto *CI = dyn_cast<CallInst>(&*I))
+      if (CI->getCalledFunction()->getName() == "proj_bdo_ddd_max_func")
+    // TODO: what happens here?
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // VerCtx Implementations
 //===----------------------------------------------------------------------===//
@@ -2485,6 +2501,13 @@ PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
                FName.contains("proj_bdo_ctrl_dep_end")) {
         AC.breakDepChain(&F, Instruction::Store, "dep end");
         InsertedBugs = true;
+      }
+
+      else if (FName.contains("proj_bdo_ddd_dep_though_extern_func")) {
+        // TODO: add type here
+        AC.insertUntraversableFuncCall(&F);
+        InsertedBugs = true;
+      } else if (FName.contains("proj_bdo_ddd_dep_though_intrinsic")) {
       }
     }
   }
