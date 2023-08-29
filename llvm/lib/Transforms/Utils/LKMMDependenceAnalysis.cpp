@@ -36,6 +36,7 @@
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
@@ -43,6 +44,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include <list>
 #include <queue>
 #include <string>
@@ -1266,7 +1268,7 @@ public:
   ///
   /// \param F the function where a call should be replaced
   /// TODO: type parameter
-  void insertUntraversableCall(Function *F);
+  void insertUntraversableCall(Function *F, bool ExternalF);
 };
 
 class VerCtx : public BFSCtx {
@@ -1377,7 +1379,8 @@ private:
 
   // TODO:When can dependencies be delegated?
   bool canBeDelegatedToDynAnalaysis(string const &ID, Instruction *IEnd) {
-    if (ID.find("proj_bdo_rr_addr_dep_begin_simple") != string::npos)
+    if (ID.find("proj_bdo_rr_addr_dep_begin_simple") != string::npos ||
+        ID.find("proj_bdo_ddd") != string::npos)
       return true;
     return false;
   }
@@ -2218,11 +2221,35 @@ void AnnotCtx::breakDepChain(Function *F, Instruction::MemoryOps IOpCode,
   }
 }
 
-void AnnotCtx::insertUntraversableCall(Function *F) {
+void AnnotCtx::insertUntraversableCall(Function *F, bool ExternalF = false) {
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-    if (auto *CI = dyn_cast<CallInst>(&*I))
-      if (CI->getCalledFunction()->getName() == "proj_bdo_ddd_max_func")
-    // TODO: what happens here?
+    if (auto *CI = dyn_cast<CallInst>(&*I)) {
+      if (CI->getCalledFunction()->getName() == "proj_bdo_ddd_max_func") {
+        if (ExternalF) {
+          Function *EF = nullptr;
+
+          EF = F->getParent()->getFunction("proj_bdo_ddd_max_func_external");
+
+          if (!EF) {
+            dbgs() << "Couldn't find function with external linkage in current "
+                      "module. DDD test case won't work.";
+            return;
+          }
+
+          dbgs() << "setting external func";
+          CI->setCalledFunction(EF);
+        } else {
+          Value *LHS = CI->getArgOperand(0);
+          Value *RHS = CI->getArgOperand(1);
+          Function *IFDecl = Intrinsic::getDeclaration(
+              F->getParent(), Intrinsic::maximum, LHS->getType());
+          auto *NewCI = CallInst::Create(IFDecl, {LHS, RHS});
+          assert(NewCI != nullptr && "NewCI is null");
+          dbgs() << "setting intrinsic";
+          ReplaceInstWithInst(CI, NewCI);
+        }
+      }
+    }
   }
 }
 
@@ -2503,11 +2530,13 @@ PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
         InsertedBugs = true;
       }
 
-      else if (FName.contains("proj_bdo_ddd_dep_though_extern_func")) {
+      else if (FName.contains("proj_bdo_ddd_dep_through_extern_func")) {
         // TODO: add type here
-        AC.insertUntraversableFuncCall(&F);
+        AC.insertUntraversableCall(&F, true);
         InsertedBugs = true;
-      } else if (FName.contains("proj_bdo_ddd_dep_though_intrinsic")) {
+      } else if (FName.contains("proj_bdo_ddd_dep_through_intrinsic")) {
+        // AC.insertUntraversableCall(&F);
+        InsertedBugs = true;
       }
     }
   }
