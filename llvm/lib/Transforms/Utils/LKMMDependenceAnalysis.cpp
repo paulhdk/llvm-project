@@ -1243,6 +1243,10 @@ protected:
   // recursios.
   unordered_set<string> InheritedADBs;
 
+  // IDs of the CDBs which ran into this function. Union of all levels of
+  // recursios.
+  unordered_set<string> InheritedCDBs;
+
   // IDs of the ADBs which ran into this function. Union of all levels of
   // recursios.
   InterprocBFSRes DBsToBeReturned;
@@ -1397,6 +1401,7 @@ protected:
 
 private:
   void addToInheritedADBs(string ID) { InheritedADBs.emplace(ID); }
+  void addToInheritedCDBs(string ID) { InheritedCDBs.emplace(ID); }
 
   const CtxKind Kind;
 };
@@ -1954,6 +1959,7 @@ void BFSCtx::prepareInterproc(CallBase *CallB, BasicBlock *FirstBB) {
   for (auto &CDBP : CDBs) {
     CDBP.second.setCannotResolve();
     CDBP.second.addStepToPathFrom(CallB);
+    addToInheritedCDBs(CDBP.first);
   }
 
   // FIXME: Move before handleDependentFunctionArgs call to eliminate the last
@@ -2237,7 +2243,7 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
   auto DCLEnd = DCLink(LoadI.getPointerOperand(), DCLevel::PTR);
   auto DCLAdd = DCLink(&LoadI, DCLevel::PTR);
 
-  // TODO outsource into seperate functions
+  // TODO: outsource into seperate functions
   for (auto &ADBP : ADBs) {
     auto &ADB = ADBP.second;
 
@@ -2465,7 +2471,7 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
   for (auto &CDBP : CDBs) {
     auto &ID = CDBP.first;
     auto &CDB = CDBP.second;
-    bool ADBDiscoverdInThisF = InheritedADBs.find(ID) == InheritedADBs.end();
+    bool ADBDiscoverdInThisF = InheritedCDBs.find(ID) == InheritedCDBs.end();
     DBsToBeReturned.push_back(ReturnedCDB(CDB, ADBDiscoverdInThisF));
   }
 }
@@ -2661,6 +2667,8 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
         continue;
 
     if (ParsedDepHalfTypeStr.find("begin") != string::npos) {
+      // FIXME: what happens if one ADB got added to the CDBs but the it's still
+      // present in the ADBs?
       if (ADBs.find(ParsedID) != ADBs.end() ||
           CDBs.find(ParsedID) != CDBs.end())
         updateID(ParsedID);
