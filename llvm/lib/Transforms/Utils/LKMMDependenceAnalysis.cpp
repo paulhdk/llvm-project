@@ -847,7 +847,8 @@ public:
 
   // TODO: Document
   void visitBranchInst(BranchInst &BranchI) {
-    handleControlFlowInst(BranchI, BranchI.getCondition());
+    if (BranchI.isConditional())
+      handleControlFlowInst(BranchI, BranchI.getCondition());
   }
 
   // TODO: Document
