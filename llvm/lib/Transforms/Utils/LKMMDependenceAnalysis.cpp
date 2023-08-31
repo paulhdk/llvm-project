@@ -709,10 +709,7 @@ struct InterprocRetDep {
     IRDBKind_CDB_Returned,
   };
 
-  shared_ptr<DepHalf> DB;
-
-  InterprocRetDep(shared_ptr<DepHalf> DB, IRADBKind Kind)
-      : DB(DB), Kind(Kind) {}
+  InterprocRetDep(IRADBKind Kind) : Kind(Kind) {}
 
   IRADBKind getKind() const { return Kind; }
 
@@ -721,12 +718,14 @@ private:
 };
 
 struct ReturnedADB : InterprocRetDep {
+  PotAddrDepBeg ADB;
+
   DCLevel Lvl;
   bool DiscoveredInInterproc;
 
   ReturnedADB(PotAddrDepBeg ADB, DCLevel Lvl, bool DiscoveredInInterproc)
-      : InterprocRetDep(make_shared<PotAddrDepBeg>(ADB), IRDBKind_ADB_Returned),
-        Lvl(Lvl), DiscoveredInInterproc(DiscoveredInInterproc) {}
+      : InterprocRetDep(IRDBKind_ADB_Returned), ADB(ADB), Lvl(Lvl),
+        DiscoveredInInterproc(DiscoveredInInterproc) {}
 
   static bool classof(const InterprocRetDep *IRADB) {
     return IRADB->getKind() == IRDBKind_ADB_Returned;
@@ -734,9 +733,10 @@ struct ReturnedADB : InterprocRetDep {
 };
 
 struct OverwrittenADB : InterprocRetDep {
+  PotAddrDepBeg ADB;
+
   OverwrittenADB(PotAddrDepBeg &ADB)
-      : InterprocRetDep(make_shared<PotAddrDepBeg>(ADB),
-                        IRDBKind_ADB_Overwritten) {}
+      : InterprocRetDep(IRDBKind_ADB_Overwritten), ADB(ADB) {}
 
   static bool classof(const InterprocRetDep *IRADB) {
     return IRADB->getKind() == IRDBKind_ADB_Overwritten;
@@ -744,9 +744,10 @@ struct OverwrittenADB : InterprocRetDep {
 };
 
 struct ReturnedCDB : InterprocRetDep {
+  PotCtrlDepBeg CDB;
+
   ReturnedCDB(PotCtrlDepBeg CDB, bool DiscoveredInInterproc)
-      : InterprocRetDep(make_shared<PotCtrlDepBeg>(CDB),
-                        IRDBKind_CDB_Returned) {}
+      : InterprocRetDep(IRDBKind_CDB_Returned), CDB(CDB) {}
 
   static bool classof(const InterprocRetDep *IRADB) {
     return IRADB->getKind() == IRDBKind_CDB_Returned;
@@ -755,7 +756,7 @@ struct ReturnedCDB : InterprocRetDep {
 
 // FIXME: Make this a unique_ptr. Requires at least a custom copy constructor
 // for BFSCtx (Rule of X).
-using InterprocBFSRes = list<InterprocRetDep>;
+using InterprocBFSRes = list<shared_ptr<InterprocRetDep>>;
 
 //===----------------------------------------------------------------------===//
 // The BFS Context Hierarchy
@@ -1928,7 +1929,7 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
         VC->markIDAsVerified(ID, true);
         ++It;
       } else {
-        DBsToBeReturned.push_back(OverwrittenADB(ADB));
+        DBsToBeReturned.push_back(make_shared<OverwrittenADB>(ADB));
         auto Del = It++;
         ADBs.erase(Del);
       }
@@ -2159,9 +2160,9 @@ void BFSCtx::handleCall(CallBase &CallB) {
 
   // FIXME: Make this more readable
   for (auto &IRetDep : RDBsFromCall) {
-    auto ID = IRetDep.DB->getID();
+    if (auto *OvwrADB = dyn_cast<OverwrittenADB>(IRetDep.get())) {
+      auto ID = OvwrADB->ADB.getID();
 
-    if (auto *OvwrADB = dyn_cast<OverwrittenADB>(&IRetDep)) {
       assert(ADBs.find(ID) != ADBs.end() &&
              "Overwritten ADB not present in calling function!");
 
@@ -2175,15 +2176,16 @@ void BFSCtx::handleCall(CallBase &CallB) {
         DBsToBeReturned.push_back(std::move(IRetDep));
 
       ADBs.erase(ID);
-    } else if (auto *RADB = dyn_cast<ReturnedADB>(&IRetDep)) {
+    } else if (auto *RADB = dyn_cast<ReturnedADB>(IRetDep.get())) {
+      auto ID = RADB->ADB.getID();
       auto &Lvl = RADB->Lvl;
       if (Lvl != DCLevel::NORET) {
         if (ADBs.find(ID) == ADBs.end()) {
-          if (auto *ADB = dyn_cast<PotAddrDepBeg>(RADB->DB.get())) {
-            ADBs.emplace(ID, std::move(*ADB));
+          if (!ADBs.emplace(ID, std::move(RADB->ADB)).second)
+            errs() << "Couldn't emplace ADB ReturnedADB after returning from "
+                      "call";
+          else
             ADBs.at(ID).resetDCM(BB);
-          } else
-            errs() << "Couldn't cast returned ADB to PotAddrDepBeg";
         }
 
         assert(ADBs.find(ID) != ADBs.end() &&
@@ -2216,17 +2218,16 @@ void BFSCtx::handleCall(CallBase &CallB) {
         // A dep chain didn't get returned. We start tracking the ADB
         // if we are verifying and continue.
         if (auto *VC = dyn_cast<VerCtx>(this)) {
-          VC->addToOutsideIDs(RADB->DB->getID());
+          VC->addToOutsideIDs(RADB->ADB.getID());
           DBsToBeReturned.push_back(std::move(IRetDep));
         }
       }
-    } else if (auto *RCDB = dyn_cast<ReturnedCDB>(&IRetDep)) {
-      if (auto *CDB = dyn_cast<PotCtrlDepBeg>(IRetDep.DB.get())) {
-        if (CDBs.emplace(ID, *CDB).second)
-          CDBs.at(ID).setCannotResolve();
-        else
-          CDBs.at(ID).setPathFrom(RCDB->DB->getPathFrom());
-      }
+    } else if (auto *RCDB = dyn_cast<ReturnedCDB>(IRetDep.get())) {
+      auto ID = RCDB->CDB.getID();
+      if (CDBs.emplace(ID, std::move(RCDB->CDB)).second)
+        CDBs.at(ID).setCannotResolve();
+      else
+        CDBs.at(ID).setPathFrom(RCDB->CDB.getPathFrom());
 
       CDBs.at(ID).addStepToPathFrom(&CallB, true);
     }
@@ -2333,7 +2334,7 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
       // If this dep chain runs interprocedurally, we need to make the
       // calling function aware of the overwrite
       if (InheritedADBs.find(ID) != InheritedADBs.end())
-        DBsToBeReturned.push_back(OverwrittenADB(ADB));
+        DBsToBeReturned.push_back(make_shared<OverwrittenADB>(ADB));
 
       if (isa<AnnotCtx>(this)) {
         ++ADBPIt;
@@ -2465,14 +2466,15 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
     else if (!ADBDiscoverdInThisF)
       continue;
 
-    DBsToBeReturned.push_back(std::move(RADB));
+    DBsToBeReturned.push_back(make_shared<ReturnedADB>(RADB));
   }
 
   for (auto &CDBP : CDBs) {
     auto &ID = CDBP.first;
     auto &CDB = CDBP.second;
     bool ADBDiscoverdInThisF = InheritedCDBs.find(ID) == InheritedCDBs.end();
-    DBsToBeReturned.push_back(ReturnedCDB(CDB, ADBDiscoverdInThisF));
+    DBsToBeReturned.push_back(
+        make_shared<ReturnedCDB>(CDB, ADBDiscoverdInThisF));
   }
 }
 
