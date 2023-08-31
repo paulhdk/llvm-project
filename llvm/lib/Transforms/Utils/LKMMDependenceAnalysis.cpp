@@ -2719,19 +2719,20 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
             }
           }
         }
-      }
-    } else if (ParsedDepHalfTypeStr.find("ctrl dep") != std::string::npos) {
-      if (handleCtrlDepID(ParsedID, I, ParsedDepHalfID, ParsedPathToViaFiles)) {
-        markIDAsVerified(ParsedID, true);
-        continue;
-      }
+      } else if (ParsedDepHalfTypeStr.find("ctrl dep") != std::string::npos) {
+        if (handleCtrlDepID(ParsedID, I, ParsedDepHalfID,
+                            ParsedPathToViaFiles)) {
+          markIDAsVerified(ParsedID, true);
+          continue;
+        }
 
-      if (RemappedIDs->find(ParsedID) != RemappedIDs->end()) {
-        for (auto const &RemappedID : RemappedIDs->at(ParsedID)) {
-          if (handleCtrlDepID(RemappedID, I, ParsedDepHalfID,
-                              ParsedPathToViaFiles)) {
-            markIDAsVerified(ParsedID, true);
-            break;
+        if (RemappedIDs->find(ParsedID) != RemappedIDs->end()) {
+          for (auto const &RemappedID : RemappedIDs->at(ParsedID)) {
+            if (handleCtrlDepID(RemappedID, I, ParsedDepHalfID,
+                                ParsedPathToViaFiles)) {
+              markIDAsVerified(ParsedID, true);
+              break;
+            }
           }
         }
       }
