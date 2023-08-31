@@ -85,6 +85,8 @@ using std::unordered_set;
 
 constexpr StringRef ADBStr = "LKMMDep: address dep begin";
 constexpr StringRef ADEStr = "LKMMDep: address dep end";
+constexpr StringRef CDBStr = "LKMMDep: ctrl dep begin";
+constexpr StringRef CDEStr = "LKMMDep: ctrl dep end";
 constexpr StringRef PCsADBStr = "AddrDepBeginnings";
 constexpr StringRef PCsADEStr = "AddrDepEndings";
 
@@ -242,8 +244,11 @@ class DepHalf {
 public:
   enum DepKind {
     DK_AddrBeg,
+    DK_CtrlBeg,
     DK_VerAddrBeg,
     DK_VerAddrEnd,
+    DK_VerCtrlBeg,
+    DK_VerCtrlEnd
   };
 
   /// Returns the ID of this DepHalf.
@@ -439,7 +444,7 @@ public:
   ///
   /// \param BB the BB whose dep chain union should be printed.
   void printDepChainAt(BasicBlock *BB) const {
-    auto BBIt = DCM.find(BB);
+    const auto *BBIt = DCM.find(BB);
 
     if (BBIt == DCM.end())
       return;
@@ -467,6 +472,8 @@ private:
   /// Maps BasicBlocks to their respective dep chain unions.
   DepChainMap DCM;
 
+  friend class PotCtrlDepBeg;
+
   /// Helper function for progressDCPaths(). Used for computing an intersection
   /// of dep chains.
   ///
@@ -479,9 +486,94 @@ private:
                           const DCLink &DCL) const;
 };
 
+class PotCtrlDepBeg : public DepHalf {
+public:
+  // Copy constructor for constructing a PotCtrlDep from a PotAddrDep. As
+  // PotCtrlDep require the existence of a DepChain to a READ_ONCE(), marking
+  // their beginning, there is no other way of constructing a PotCtrlDepBeg.
+  PotCtrlDepBeg(PotAddrDepBeg &ADB, std::string BranchID,
+                bool Resolvable = true)
+      : PotCtrlDepBeg(ADB.I, ADB.ID, ADB.PathToViaFiles, BranchID, Resolvable) {
+  }
+
+  /// Checks whether this PotCtrlDepBeg was recently discovered,
+  /// i.e. if it doesn't maintain any paths yet.
+  ///
+  /// \returns true if this PotCtrlDepBeg was recently discovered.
+  bool recentlyDiscovered() const { return CtrlPaths.empty(); }
+
+  /// Updates the PotCtrlDepBeg to be unresolvable. This might be the case when
+  /// not all ctrl paths carry over to a called function. Within the context(s)
+  /// of the called function (and beyond), the PotCtrlDepBeg cannot be resolved
+  /// as some CtrlPaths still reside in the calling function.
+  void setCannotResolve() { Resolvable = false; }
+
+  /// Checks if the PotCtrlDepBeg can be resolved right now.
+  ///
+  /// \returns true if it can be resolved.
+  bool canResolve() const { return Resolvable; }
+
+  /// Checks if this PotCtrlDepBeg has ctrl paths whose heads are at \p BB right
+  /// now.
+  ///
+  /// \returns true if a ctrl path is at \p BB.
+  bool isAt(BasicBlock *BB) const {
+    return CtrlPaths.find(BB) != CtrlPaths.end();
+  }
+
+  /// Returns a string representation of the location of the branch instruction.
+  ///
+  /// \returns a string representation of location of the branch instruction.
+  std::string const &getBranchID() const { return BranchID; };
+
+  /// Maintains the ctrl paths at this PotCtrlDepBeg.
+  ///
+  /// \param BB the BB the BFS just ran on.
+  /// \param SuccessorsWOBackEdges all successors of BB which are not
+  ///  connected through back edges.
+  /// \param HasBackEdges denotes whether any back edges start at \p BB.
+  ///
+  /// \returns true if the scope of this PotCtrlDepBeg has ended.
+  bool
+  progressCtrlPaths(BasicBlock *BB,
+                    std::unordered_set<BasicBlock *> *SuccessorsWOBackEdges,
+                    bool HasBackEdges);
+
+  /// Annotates a ctrl dependency from a given ending to this beginning.
+  ///
+  /// \param PathTo2 the path the annotation pass took to discover \p I2.
+  /// \param PathToViaFiles2 the path the annotation pass took to discover \p
+  /// I2. \param I2 the instruction where the ctrl dependency ends.
+  void addCtrlDep(std::string ID2, std::string PathToViaFiles2,
+                  Instruction *I2) const;
+
+  static bool classof(const DepHalf *VDH) {
+    return VDH->getKind() == DK_CtrlBeg;
+  }
+
+private:
+  /// A string representation of the branch instruction's location
+  const std::string BranchID;
+
+  // Set to true if this PotCtrlDepBeg cannot be resolved
+  // in the current function, e.g. because the branch inst is located in a
+  // function which calls the current function.
+  bool Resolvable;
+
+  // The set of paths which are induced by the branch instruction. Paths
+  // are represented by their 'head', i.e. the BB they are currently at as per
+  // the BFS.
+  std::unordered_set<BasicBlock *> CtrlPaths;
+
+  PotCtrlDepBeg(Instruction *I, std::string BegID, std::string PathToViaFiles,
+                std::string BranchID, bool Resolvable = true)
+      : DepHalf(I, BegID, PathToViaFiles, DK_CtrlBeg), BranchID{BranchID},
+        Resolvable{Resolvable}, CtrlPaths(){};
+};
+
 class VerDepHalf : public DepHalf {
 public:
-  enum BrokenByType { BrokenDC, FullToPart };
+  enum BrokenByType { BrokenDC, FullToPart, PartToFull };
 
   void setBrokenBy(BrokenByType BB) { BrokenBy = BB; }
 
@@ -490,6 +582,8 @@ public:
     case BrokenDC:
       return "by breaking the dependency chain";
     case FullToPart:
+      return "by converting a full dependency to a partial dependency";
+    case PartToFull:
       return "by converting a partial dependency to a full dependency";
     }
   }
@@ -503,7 +597,7 @@ public:
   virtual ~VerDepHalf(){};
 
   static bool classof(const DepHalf *VDH) {
-    return VDH->getKind() >= DK_VerAddrBeg && VDH->getKind() <= DK_VerAddrEnd;
+    return VDH->getKind() >= DK_VerAddrBeg && VDH->getKind() <= DK_VerCtrlEnd;
   }
 
   string const &getParsedID() const { return ParsedID; }
@@ -551,6 +645,27 @@ private:
   DepChain DC;
 };
 
+class VerCtrlDepBeg : public VerDepHalf {
+public:
+  VerCtrlDepBeg(Instruction *I, std::string ParsedID, std::string DepHalfID,
+                std::string PathToViaFiles, std::string ParsedDepHalfID,
+                std::string ParsedPathToViaFiles, std::string ParsedBranchID)
+      : VerDepHalf(I, ParsedID, DepHalfID, PathToViaFiles, ParsedDepHalfID,
+                   ParsedPathToViaFiles, DK_VerCtrlBeg),
+        ParsedBranchID(ParsedBranchID) {}
+
+  const std::string &getParsedBranchID() const { return ParsedBranchID; }
+
+  static bool classof(const DepHalf *VDH) {
+    return VDH->getKind() == DK_VerCtrlBeg;
+  }
+
+private:
+  // A string representation of the path the BFS took in unoptimized IR to
+  // discover the branch instruction. Is retrived from the metadata annotation.
+  const std::string ParsedBranchID;
+};
+
 class VerAddrDepEnd : public VerDepHalf {
 public:
   VerAddrDepEnd(Instruction *I, string ParsedID, string DepHalfID,
@@ -572,14 +687,32 @@ private:
   bool Delegated;
 };
 
-struct InterprocRetAddrDep {
+class VerCtrlDepEnd : public VerDepHalf {
+public:
+  VerCtrlDepEnd(Instruction *I, std::string ParsedID, std::string DepHalfID,
+                std::string PathToViaFiles, std::string ParsedDepHalfID,
+                std::string ParsedPathToViaFiles)
+      : VerDepHalf(I, ParsedID, DepHalfID, PathToViaFiles, ParsedDepHalfID,
+                   ParsedPathToViaFiles, DK_VerCtrlEnd) {}
+
+  static bool classof(const DepHalf *VDH) {
+    return VDH->getKind() == DK_VerCtrlEnd;
+  }
+};
+
+// TODO: how do ctrl deps fit in here?
+struct InterprocRetDep {
   /// Discriminator for LLVM-style RTTI (dyn_cast<> et al.)
-  enum IRADBKind { IRADBKind_Overwritten, IRADBKind_Returned };
+  enum IRADBKind {
+    IRDBKind_ADB_Overwritten,
+    IRDBKind_ADB_Returned,
+    IRDBKind_CDB_Returned,
+  };
 
-  PotAddrDepBeg ADB;
+  shared_ptr<DepHalf> DB;
 
-  InterprocRetAddrDep(PotAddrDepBeg &ADB, IRADBKind Kind)
-      : ADB(ADB), Kind(Kind) {}
+  InterprocRetDep(shared_ptr<DepHalf> DB, IRADBKind Kind)
+      : DB(DB), Kind(Kind) {}
 
   IRADBKind getKind() const { return Kind; }
 
@@ -587,31 +720,42 @@ private:
   const IRADBKind Kind;
 };
 
-struct ReturnedADB : InterprocRetAddrDep {
+struct ReturnedADB : InterprocRetDep {
   DCLevel Lvl;
   bool DiscoveredInInterproc;
 
   ReturnedADB(PotAddrDepBeg ADB, DCLevel Lvl, bool DiscoveredInInterproc)
-      : InterprocRetAddrDep(ADB, IRADBKind_Returned), Lvl(Lvl),
-        DiscoveredInInterproc(DiscoveredInInterproc) {}
+      : InterprocRetDep(make_shared<PotAddrDepBeg>(ADB), IRDBKind_ADB_Returned),
+        Lvl(Lvl), DiscoveredInInterproc(DiscoveredInInterproc) {}
 
-  static bool classof(const InterprocRetAddrDep *IRADB) {
-    return IRADB->getKind() == IRADBKind_Returned;
+  static bool classof(const InterprocRetDep *IRADB) {
+    return IRADB->getKind() == IRDBKind_ADB_Returned;
   }
 };
 
-struct OverwrittenADB : InterprocRetAddrDep {
+struct OverwrittenADB : InterprocRetDep {
   OverwrittenADB(PotAddrDepBeg &ADB)
-      : InterprocRetAddrDep(ADB, IRADBKind_Overwritten) {}
+      : InterprocRetDep(make_shared<PotAddrDepBeg>(ADB),
+                        IRDBKind_ADB_Overwritten) {}
 
-  static bool classof(const InterprocRetAddrDep *IRADB) {
-    return IRADB->getKind() == IRADBKind_Overwritten;
+  static bool classof(const InterprocRetDep *IRADB) {
+    return IRADB->getKind() == IRDBKind_ADB_Overwritten;
+  }
+};
+
+struct ReturnedCDB : InterprocRetDep {
+  ReturnedCDB(PotCtrlDepBeg CDB, bool DiscoveredInInterproc)
+      : InterprocRetDep(make_shared<PotCtrlDepBeg>(CDB),
+                        IRDBKind_CDB_Returned) {}
+
+  static bool classof(const InterprocRetDep *IRADB) {
+    return IRADB->getKind() == IRDBKind_CDB_Returned;
   }
 };
 
 // FIXME: Make this a unique_ptr. Requires at least a custom copy constructor
 // for BFSCtx (Rule of X).
-using InterprocBFSRes = list<shared_ptr<InterprocRetAddrDep>>;
+using InterprocBFSRes = list<InterprocRetDep>;
 
 //===----------------------------------------------------------------------===//
 // The BFS Context Hierarchy
@@ -626,8 +770,8 @@ public:
   CtxKind getKind() const { return Kind; }
 
   BFSCtx(BasicBlock *BB, CtxKind CK)
-      : BB(BB), ADBs(), CallPath(new CallPathStack()), InheritedADBs(),
-        ADBsToBeReturned(), Kind(CK){};
+      : BB(BB), ADBs(), CDBs(), CallPath(new CallPathStack()), InheritedADBs(),
+        DBsToBeReturned(), Kind(CK){};
 
   virtual ~BFSCtx() {
     if (!CallPath->empty())
@@ -655,6 +799,17 @@ public:
   /// \param BB the BB the BFS just visited.
   /// \param BEDs the set of back edge destinations for \p BB.
   void deleteAddrDepDCsAt(BasicBlock *BB, unordered_set<BasicBlock *> &BEDs);
+
+  /// Updates all PotCtrlDepBegs' paths to reflect the state after the BFS
+  /// visited \p BB.
+  ///
+  /// \param BB the BasicBlock the BFS just visited.
+  /// \param SuccessorsWOBackEdges all successors of \p BB which are not
+  ///  connected through back edges.
+  /// \param HasBackEdges denotes whether any back edges start at \p BB.
+  void handleCtrlPaths(BasicBlock *BB,
+                       std::unordered_set<BasicBlock *> *SuccessorsWOBackEdges,
+                       bool HasBackEdges);
 
   /// Checks if a function call has arguments which are part of DepChains in the
   /// current context. This function is expected to be called at the beginning
@@ -690,11 +845,23 @@ public:
   /// \param ReturnI the return instruction.
   void visitReturnInst(ReturnInst &ReturnI);
 
-  /// Skipped.
-  void visitBranchInst(BranchInst &BranchI) {}
+  // TODO: Document
+  void visitBranchInst(BranchInst &BranchI) {
+    handleControlFlowInst(BranchI, BranchI.getCondition());
+  }
 
-  /// Skipped.
-  void visitSwitchInst(SwitchInst &SwitchI) {}
+  // TODO: Document
+  void visitSwitchInst(SwitchInst &SwitchI) {
+    handleControlFlowInst(SwitchI, SwitchI.getCondition());
+  }
+
+  /// Shared functionality between visitBranchInstruction() and
+  /// visitSwitchInstruction(), i.e. all instruction which have multiple
+  /// successors within a function's CFG.
+  ///
+  /// \param BranchI the branch / switch instruction.
+  /// \param Cond the condition the successors depend on.
+  void handleControlFlowInst(Instruction &BranchI, Value *Cond);
 
   /// Skipped.
   void visitIndirectBranchInst(IndirectBrInst &IndirectBrI) {}
@@ -1065,6 +1232,9 @@ protected:
   // All potential address dependency beginnings (ADBs) which are being tracked.
   DepHalfMap<PotAddrDepBeg> ADBs;
 
+  // All potential control dependency beginnings (CDBs) which are being tracked.
+  DepHalfMap<PotCtrlDepBeg> CDBs;
+
   // The path which the BFS took to reach BB.
   shared_ptr<CallPathStack> CallPath;
 
@@ -1074,7 +1244,7 @@ protected:
 
   // IDs of the ADBs which ran into this function. Union of all levels of
   // recursios.
-  InterprocBFSRes ADBsToBeReturned;
+  InterprocBFSRes DBsToBeReturned;
 
   /// Prepares a newly created BFSCtx for interprocedural analysis.
   ///
@@ -1240,7 +1410,7 @@ public:
   // FIXME Nearly identical to VerCtx's copy constructor. Can we template
   // this?
   AnnotCtx(AnnotCtx &AC, BasicBlock *FirstBB, CallBase *CallB) : AnnotCtx(AC) {
-    ADBsToBeReturned.clear();
+    DBsToBeReturned.clear();
 
     prepareInterproc(CallB, FirstBB);
 
@@ -1264,16 +1434,19 @@ public:
 class VerCtx : public BFSCtx {
 public:
   VerCtx(BasicBlock *BB, shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs,
+         shared_ptr<DepHalfMap<VerCtrlDepBeg>> BrokenCDBs,
          shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs,
+         shared_ptr<DepHalfMap<VerCtrlDepEnd>> BrokenCDEs,
          shared_ptr<IDReMap> RemappedIDs, shared_ptr<VerIDSet> VerifiedIDs)
-      : BFSCtx(BB, CK_Ver), BrokenADBs(BrokenADBs), BrokenADEs(BrokenADEs),
+      : BFSCtx(BB, CK_Ver), BrokenADBs(BrokenADBs), BrokenCDBs(BrokenCDBs),
+        BrokenADEs(BrokenADEs), BrokenCDEs(BrokenCDEs),
         RemappedIDs(RemappedIDs), VerifiedIDs(VerifiedIDs) {}
 
   // Creates a VerCtx for exploring a called function.
   // FIXME Nearly identical to AnnotCtx's copy constructor. Can we template
   // this?
   VerCtx(VerCtx &VC, BasicBlock *FirstBB, CallBase *CallB) : VerCtx(VC) {
-    ADBsToBeReturned.clear();
+    DBsToBeReturned.clear();
 
     prepareInterproc(CallB, FirstBB);
 
@@ -1290,7 +1463,7 @@ public:
   ///  annotation(s).
   void handleDepAnnotations(Instruction *I, MDNode *MDAnnotation);
 
-  void markIDAsVerified(string ParsedID) {
+  void markIDAsVerified(string ParsedID, bool Ctrl = false) {
     auto DelId = [](auto &ID, auto &Bs, auto &Es, auto &RemappedIDs) {
       Bs->erase(ID);
       Es->erase(ID);
@@ -1302,7 +1475,10 @@ public:
         }
     };
 
-    DelId(ParsedID, BrokenADBs, BrokenADEs, RemappedIDs);
+    if (Ctrl)
+      DelId(ParsedID, BrokenCDBs, BrokenCDEs, RemappedIDs);
+    else
+      DelId(ParsedID, BrokenADBs, BrokenADEs, RemappedIDs);
 
     VerifiedIDs->insert(ParsedID);
     RemappedIDs->erase(ParsedID);
@@ -1327,8 +1503,12 @@ public:
 private:
   // Contains all unverified address dependency beginning annotations.
   shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs;
+  // Contains all unverified address dependency beginning annotations.
+  shared_ptr<DepHalfMap<VerCtrlDepBeg>> BrokenCDBs;
   // Contains all unverified address dependency ending annotations.
   shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs;
+  // Contains all unverified address dependency ending annotations.
+  shared_ptr<DepHalfMap<VerCtrlDepEnd>> BrokenCDEs;
 
   // All remapped IDs which were discovered from the current root function.
   shared_ptr<IDReMap> RemappedIDs;
@@ -1351,6 +1531,22 @@ private:
   /// \returns true if the address dependency could be verified.
   bool wasADBPreserved(string const &ID, Instruction *IEnd,
                        string &ParsedPathTo, string &ParsedPathToViaFiles);
+
+  /// Responsible for handling a single control dependency ending annotation.
+  ///
+  /// \param ID the ID of the ctrl dep.
+  /// \param I the instruction the annotation was attached to, i.e. the
+  ///  instruction where the ctrl dep ends.
+  /// \param ParsedPathTo the CallPath the annotation pass took to discover
+  ///  \p I. Expressed in terms of functionName::line:col.
+  /// \param ParsedPathToViaFiles the CallPath the annotation pass took to
+  /// discover
+  ///  \p I. Expressed in terms of filename::line:col.
+  ///
+  /// \returns true if the ctrl dep could be verified.
+  bool handleCtrlDepID(std::string const &ID, Instruction *I,
+                       std::string &ParsedPathTo,
+                       std::string &ParsedPathToViaFiles);
 
   /// Responsible for updating an ID if the verification pass has encountered
   /// it before. Will add the updated ID to \p RemappedIDs.
@@ -1410,6 +1606,8 @@ private:
 string DepHalf::getID() const {
   if (isa<PotAddrDepBeg>(this))
     return ID;
+  if (const auto *PCDB = dyn_cast<PotCtrlDepBeg>(this))
+    return ID + "\n/\\" + PCDB->getBranchID();
   if (const auto *VDH = dyn_cast<VerDepHalf>(this))
     return VDH->getParsedID();
   llvm_unreachable("unhandled case in getID");
@@ -1546,6 +1744,84 @@ bool PotAddrDepBeg::depChainsShareLink(
 }
 
 //===----------------------------------------------------------------------===//
+// PotCtrlDepBeg Implementations
+//===----------------------------------------------------------------------===//
+
+bool PotCtrlDepBeg::progressCtrlPaths(
+    BasicBlock *BB, std::unordered_set<BasicBlock *> *SuccessorsWOBackEdges,
+    bool HasBackEdges) {
+
+  // Skip beginnigns that lie outside the current BB's function. Necessary
+  // for interprocedural analysis.
+  if (!canResolve())
+    return false;
+
+  // Account for the case where there are no paths at the current BB, but the
+  // beginning isn't new.
+  if (!recentlyDiscovered() && !isAt(BB))
+    return false;
+
+  // If the paths are empty, this dependency begins in BB. Only add
+  // successors and continue. Otherwise, continue below.
+  if (!recentlyDiscovered()) {
+    // Erase paths which run through the current BB.
+    // Only erase such paths if the current BB doesn't have a back edge or
+    // contains a return. If it does, the path through the back edge /
+    // reuturning block doesn't get resolved. Don't erase, only add successors.
+    //
+    // This check also accounts for 'dead ends', which never get resolved
+    // either.
+    if (!isa<ReturnInst>(BB->getTerminator()) && !HasBackEdges)
+      CtrlPaths.erase({BB});
+
+    // If a control dependency gets resolved, there must be a point where there
+    // is only one path left here, which is at the BB resolving the ctrl dep.
+    if (CtrlPaths.size() == 1)
+      if (SuccessorsWOBackEdges->size() == 1)
+        if (*SuccessorsWOBackEdges->begin() == *CtrlPaths.begin())
+          return true;
+  }
+
+  // Add paths for successors. If a path already is at a successor, the two
+  // paths merge.
+  for (auto &S : *SuccessorsWOBackEdges)
+    CtrlPaths.insert(S);
+
+  // Account for the case where the condition has a backedge, e.g. in a do-while
+  // loop.
+  if (HasBackEdges)
+    CtrlPaths.insert(BB);
+
+  return false;
+}
+
+// FIXME: nearly identical to addAddrDep. Could be generalised with lambda?
+void PotCtrlDepBeg::addCtrlDep(std::string ID2, std::string PathToViaFiles2,
+                               Instruction *I2) const {
+  auto DepID = getID() + PathFrom + ID2;
+
+  auto BeginAnnotation = (CDBStr + ",\n" + DepID + ",\n" + getID() + ",\n" +
+                          getBranchID() + ",\n" + getPathToViaFiles() + ";")
+                             .str();
+
+  auto EndAnnotation =
+      (CDEStr + ",\n" + DepID + ",\n" + ID2 + ",\n" + PathToViaFiles2 + ";")
+          .str();
+
+  auto BeginAnnotationRed =
+      (CDBStr + ",\n" + DepID + ",\n" + getID() + ",\n" + getBranchID()).str();
+
+  auto EndAnnotationRed = (CDEStr + ",\n" + DepID + ",\n" + ID2).str();
+
+  if (hasAnnotation(I, BeginAnnotationRed) &&
+      hasAnnotation(I2, EndAnnotationRed))
+    return;
+
+  I->addAnnotationMetadata(BeginAnnotation);
+  I2->addAnnotationMetadata(EndAnnotation);
+}
+
+//===----------------------------------------------------------------------===//
 // BFSCtx Implementations
 //===----------------------------------------------------------------------===//
 
@@ -1578,6 +1854,8 @@ void BFSCtx::runBFS() {
     removeBackEdgesFromSuccessors(BB, &BEDsForBB.at(BB),
                                   &SuccessorsWOBackEdges);
 
+    handleCtrlPaths(BB, &SuccessorsWOBackEdges, !BEDsForBB.at(BB).empty());
+
     for (auto &SBB : SuccessorsWOBackEdges) {
       if (bfsCanVisit(SBB, BFSInfo, BEDsForBB.at(SBB)))
         BFSQueue.push(SBB);
@@ -1601,6 +1879,18 @@ void BFSCtx::deleteAddrDepDCsAt(BasicBlock *BB,
                                 unordered_set<BasicBlock *> &BEDs) {
   for (auto &ADBP : ADBs)
     ADBP.second.deleteDCsAt(BB, BEDs);
+}
+
+void BFSCtx::handleCtrlPaths(BasicBlock *BB,
+                             std::unordered_set<BasicBlock *> *SuccWoBack,
+                             bool HasBackEdges) {
+  for (auto CdbIt = CDBs.begin(), CdbEnd = CDBs.end(); CdbIt != CdbEnd;) {
+    auto &CDB = CdbIt->second;
+    if (CDB.progressCtrlPaths(BB, SuccWoBack, HasBackEdges))
+      CdbIt = CDBs.erase(CdbIt);
+    else
+      ++CdbIt;
+  }
 }
 
 void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
@@ -1628,10 +1918,11 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
       } else if (auto *VC = dyn_cast<VerCtx>(this)) {
         // Mark dependencies through external or empty functions as trivially
         // verified in VerCtx
-        VC->markIDAsVerified(ID);
+        VC->markIDAsVerified(ID, false);
+        VC->markIDAsVerified(ID, true);
         ++It;
       } else {
-        ADBsToBeReturned.push_back(make_shared<OverwrittenADB>(ADB));
+        DBsToBeReturned.push_back(OverwrittenADB(ADB));
         auto Del = It++;
         ADBs.erase(Del);
       }
@@ -1654,6 +1945,16 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
 void BFSCtx::prepareInterproc(CallBase *CallB, BasicBlock *FirstBB) {
   handleDependentFunctionArgs(CallB, FirstBB);
 
+  // Every unresolved PotCtrlDepBeg at CallI carries over to the called
+  // function. Since the PotCtrlDepBeg is still being tracked, there exists at
+  // least one ctrl path whose head is at a different BB than the one the BFS
+  // is currently visiting. Therefore the PotCtrlDep cannot be resolved in the
+  // called function.
+  for (auto &CDBP : CDBs) {
+    CDBP.second.setCannotResolve();
+    CDBP.second.addStepToPathFrom(CallB);
+  }
+
   // FIXME: Move before handleDependentFunctionArgs call to eliminate the last
   // argument
   CallPath->push_back(CallB);
@@ -1664,12 +1965,12 @@ InterprocBFSRes BFSCtx::runInterprocBFS(BasicBlock *FirstBB, CallBase *CallB) {
   if (auto *AC = dyn_cast<AnnotCtx>(this)) {
     AnnotCtx InterprocCtx = AnnotCtx(*AC, FirstBB, CallB);
     InterprocCtx.runBFS();
-    return InterprocBFSRes(std::move(InterprocCtx.ADBsToBeReturned));
+    return InterprocBFSRes(std::move(InterprocCtx.DBsToBeReturned));
   }
   if (auto *VC = dyn_cast<VerCtx>(this)) {
     VerCtx InterprocCtx = VerCtx(*VC, FirstBB, CallB);
     InterprocCtx.runBFS();
-    return InterprocBFSRes(std::move(InterprocCtx.ADBsToBeReturned));
+    return InterprocBFSRes(std::move(InterprocCtx.DBsToBeReturned));
   }
   llvm_unreachable("Called runInterprocBFS() with no BFSCtx child.");
 }
@@ -1845,15 +2146,15 @@ void BFSCtx::handleCall(CallBase &CallB) {
   //
   // Contains existing beginnings whoes dep chain(s) run into and out of the
   // interprocedural context.
-  auto &RADBsFromCall = Res;
+  auto &RDBsFromCall = Res;
 
   auto *VAdd = cast<Value>(&CallB);
 
   // FIXME: Make this more readable
-  for (auto &IRetAD : RADBsFromCall) {
-    auto ID = IRetAD->ADB.getID();
+  for (auto &IRetDep : RDBsFromCall) {
+    auto ID = IRetDep.DB->getID();
 
-    if (auto *OvwrADB = dyn_cast<OverwrittenADB>(IRetAD.get())) {
+    if (auto *OvwrADB = dyn_cast<OverwrittenADB>(&IRetDep)) {
       assert(ADBs.find(ID) != ADBs.end() &&
              "Overwritten ADB not present in calling function!");
 
@@ -1864,15 +2165,18 @@ void BFSCtx::handleCall(CallBase &CallB) {
       ADB.addStepToPathFrom(&CallB, true);
 
       if (InheritedADBs.find(ID) != InheritedADBs.end())
-        ADBsToBeReturned.push_back(std::move(IRetAD));
+        DBsToBeReturned.push_back(std::move(IRetDep));
 
       ADBs.erase(ID);
-    } else if (auto *RADB = dyn_cast<ReturnedADB>(IRetAD.get())) {
+    } else if (auto *RADB = dyn_cast<ReturnedADB>(&IRetDep)) {
       auto &Lvl = RADB->Lvl;
       if (Lvl != DCLevel::NORET) {
         if (ADBs.find(ID) == ADBs.end()) {
-          ADBs.emplace(ID, std::move(RADB->ADB));
-          ADBs.at(ID).resetDCM(BB);
+          if (auto *ADB = dyn_cast<PotAddrDepBeg>(RADB->DB.get())) {
+            ADBs.emplace(ID, std::move(*ADB));
+            ADBs.at(ID).resetDCM(BB);
+          } else
+            errs() << "Couldn't cast returned ADB to PotAddrDepBeg";
         }
 
         assert(ADBs.find(ID) != ADBs.end() &&
@@ -1905,10 +2209,19 @@ void BFSCtx::handleCall(CallBase &CallB) {
         // A dep chain didn't get returned. We start tracking the ADB
         // if we are verifying and continue.
         if (auto *VC = dyn_cast<VerCtx>(this)) {
-          VC->addToOutsideIDs(RADB->ADB.getID());
-          ADBsToBeReturned.push_back(std::move(IRetAD));
+          VC->addToOutsideIDs(RADB->DB->getID());
+          DBsToBeReturned.push_back(std::move(IRetDep));
         }
       }
+    } else if (auto *RCDB = dyn_cast<ReturnedCDB>(&IRetDep)) {
+      if (auto *CDB = dyn_cast<PotCtrlDepBeg>(IRetDep.DB.get())) {
+        if (CDBs.emplace(ID, *CDB).second)
+          CDBs.at(ID).setCannotResolve();
+        else
+          CDBs.at(ID).setPathFrom(RCDB->DB->getPathFrom());
+      }
+
+      CDBs.at(ID).addStepToPathFrom(&CallB, true);
     }
   }
 }
@@ -2013,7 +2326,7 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
       // If this dep chain runs interprocedurally, we need to make the
       // calling function aware of the overwrite
       if (InheritedADBs.find(ID) != InheritedADBs.end())
-        ADBsToBeReturned.push_back(make_shared<OverwrittenADB>(ADB));
+        DBsToBeReturned.push_back(OverwrittenADB(ADB));
 
       if (isa<AnnotCtx>(this)) {
         ++ADBPIt;
@@ -2028,6 +2341,13 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
     ADB.tryAddValueToDepChains(StoreI, DCLAdd, DCLCmp);
 
     ++ADBPIt;
+  }
+
+  for (auto &CDBP : CDBs) {
+    auto &CDB = CDBP.second;
+    if (CDB.isAt(BB))
+      CDB.addCtrlDep(getInstLocString(&StoreI), getFullPath(&StoreI, true),
+                     &StoreI);
   }
 }
 
@@ -2120,8 +2440,7 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
 
     bool ADBDiscoverdInThisF = InheritedADBs.find(ID) == InheritedADBs.end();
 
-    auto RADB =
-        make_shared<ReturnedADB>(ADB, DCLevel::NORET, ADBDiscoverdInThisF);
+    auto RADB = ReturnedADB(ADB, DCLevel::NORET, ADBDiscoverdInThisF);
 
     auto RetAtPTR = ADB.belongsToDepChain(BB, RetLinkPTR);
     auto RetAtPTE = ADB.belongsToDepChain(BB, RetLinkPTE);
@@ -2131,15 +2450,32 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
     // as part of the current interprocedural analysis, the calling function
     // must be aware of its existence and it must not be returned at all.
     if (RetAtPTR && RetAtPTE)
-      RADB->Lvl = DCLevel::BOTH;
+      RADB.Lvl = DCLevel::BOTH;
     else if (RetAtPTR)
-      RADB->Lvl = DCLevel::PTR;
+      RADB.Lvl = DCLevel::PTR;
     else if (RetAtPTE)
-      RADB->Lvl = DCLevel::PTE;
+      RADB.Lvl = DCLevel::PTE;
     else if (!ADBDiscoverdInThisF)
       continue;
 
-    ADBsToBeReturned.push_back(std::move(RADB));
+    DBsToBeReturned.push_back(std::move(RADB));
+  }
+
+  for (auto &CDBP : CDBs) {
+    auto &ID = CDBP.first;
+    auto &CDB = CDBP.second;
+    bool ADBDiscoverdInThisF = InheritedADBs.find(ID) == InheritedADBs.end();
+    DBsToBeReturned.push_back(ReturnedCDB(CDB, ADBDiscoverdInThisF));
+  }
+}
+
+void BFSCtx::handleControlFlowInst(Instruction &BranchI, Value *Cond) {
+  DCLink DCLCond = DCLink(Cond, DCLevel::PTR);
+  for (auto &ADBP : ADBs) {
+    auto &ADB = ADBP.second;
+
+    if (ADB.belongsToDepChain(BB, DCLCond))
+      CDBs.emplace(ADBP.first, PotCtrlDepBeg(ADB, getInstLocString(&BranchI)));
   }
 }
 
@@ -2324,7 +2660,8 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
         continue;
 
     if (ParsedDepHalfTypeStr.find("begin") != string::npos) {
-      if (ADBs.find(ParsedID) != ADBs.end())
+      if (ADBs.find(ParsedID) != ADBs.end() ||
+          CDBs.find(ParsedID) != CDBs.end())
         updateID(ParsedID);
 
       // For tracking the dependency chain, always add a PotAddrDepBeg
@@ -2335,18 +2672,28 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       ADBs.emplace(ParsedID, PotAddrDepBeg(I, ParsedID, getFullPath(I, true),
                                            std::move(DC), I->getParent()));
 
-      if (ParsedDepHalfTypeStr.find("address dep") != string::npos)
+      if (ParsedDepHalfTypeStr.find("address dep") != string::npos) {
         // Assume broken until proven wrong.
         BrokenADBs->emplace(ParsedID,
                             VerAddrDepBeg(I, ParsedID, getFullPath(I),
                                           getFullPath(I, true), ParsedDepHalfID,
                                           ParsedPathToViaFiles));
+      } else if (ParsedDepHalfTypeStr.find("ctrl dep") != std::string::npos) {
+        auto &ParsedBranchID = AnnotData[3];
+        auto &ParsedPathToViaFiles = AnnotData[4];
+
+        // Assume broken until proven wrong.
+        BrokenCDBs->emplace(
+            ParsedID, VerCtrlDepBeg(I, ParsedID, getFullPath(I),
+                                    getFullPath(I, true), ParsedDepHalfID,
+                                    ParsedPathToViaFiles, ParsedBranchID));
+      }
     } else if (ParsedDepHalfTypeStr.find("end") != string::npos) {
       // If we are able to verify one pair in
       // {ORIGINAL_ID} \cup REMAPPED_IDS.at(ORIGINAL_ID) x {ORIGINAL_ID}
-      // We consider ORIGINAL_ID verified; there only exists one dependency
-      // in unoptimised IR, hence we only look for one dependency in
-      // optimised IR.
+      // We consider ORIGINAL_ID verified; there only exists one
+      // dependency in unoptimised IR, hence we only look for one
+      // dependency in optimised IR.
       if (ParsedDepHalfTypeStr.find("address dep") != string::npos) {
         if (wasADBPreserved(ParsedID, I, ParsedDepHalfID,
                             ParsedPathToViaFiles)) {
@@ -2364,8 +2711,40 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
           }
         }
       }
+    } else if (ParsedDepHalfTypeStr.find("ctrl dep") != std::string::npos) {
+      if (handleCtrlDepID(ParsedID, I, ParsedDepHalfID, ParsedPathToViaFiles)) {
+        markIDAsVerified(ParsedID, true);
+        continue;
+      }
+
+      if (RemappedIDs->find(ParsedID) != RemappedIDs->end()) {
+        for (auto const &RemappedID : RemappedIDs->at(ParsedID)) {
+          if (handleCtrlDepID(RemappedID, I, ParsedDepHalfID,
+                              ParsedPathToViaFiles)) {
+            markIDAsVerified(ParsedID, true);
+            break;
+          }
+        }
+      }
     }
   }
+}
+
+bool VerCtx::handleCtrlDepID(std::string const &ID, Instruction *I,
+                             std::string &ParsedDepHalfID,
+                             std::string &ParsedPathToViaFiles) {
+  if (CDBs.find(ID) != CDBs.end()) {
+    BrokenCDBs->erase(ID);
+    return true;
+  }
+
+  BrokenCDEs->emplace(ID,
+                      VerCtrlDepEnd(I, ID, getFullPath(I), getFullPath(I, true),
+                                    ParsedDepHalfID, ParsedPathToViaFiles));
+
+  BrokenCDEs->at(ID).setBrokenBy(VerDepHalf::BrokenByType::PartToFull);
+
+  return false;
 }
 
 class LKMMAnnotator {
@@ -2383,8 +2762,14 @@ private:
   // Contains all unverified address dependency beginning annotations.
   shared_ptr<DepHalfMap<VerAddrDepBeg>> BrokenADBs;
 
+  // Contains all unverified control dependency beginning annotations.
+  shared_ptr<DepHalfMap<VerCtrlDepBeg>> BrokenCDBs;
+
   // Contains all unverified address dependency ending annotations.
   shared_ptr<DepHalfMap<VerAddrDepEnd>> BrokenADEs;
+
+  // Contains all unverified control dependency ending annotations.
+  shared_ptr<DepHalfMap<VerCtrlDepEnd>> BrokenCDEs;
 
   shared_ptr<IDReMap> RemappedIDs;
 
@@ -2494,7 +2879,9 @@ PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
 
 LKMMVerifier::LKMMVerifier()
     : BrokenADBs(std::make_shared<DepHalfMap<VerAddrDepBeg>>()),
+      BrokenCDBs(std::make_shared<DepHalfMap<VerCtrlDepBeg>>()),
       BrokenADEs(std::make_shared<DepHalfMap<VerAddrDepEnd>>()),
+      BrokenCDEs(std::make_shared<DepHalfMap<VerCtrlDepEnd>>()),
       RemappedIDs(std::make_shared<IDReMap>()),
       VerifiedIDs(std::make_shared<unordered_set<string>>()),
       PrintedBrokenIDs(), PrintedModules() {}
@@ -2504,8 +2891,8 @@ PreservedAnalyses LKMMVerifier::run(Module &M, ModuleAnalysisManager &AM) {
     if (F.empty())
       continue;
 
-    auto VC =
-        VerCtx(&*F.begin(), BrokenADBs, BrokenADEs, RemappedIDs, VerifiedIDs);
+    auto VC = VerCtx(&*F.begin(), BrokenADBs, BrokenCDBs, BrokenADEs,
+                     BrokenCDEs, RemappedIDs, VerifiedIDs);
 
     VC.runBFS();
   }
@@ -2536,8 +2923,9 @@ void LKMMVerifier::printBrokenDeps() {
 
     auto &VDE = VDEP->second;
 
-    if (VDE.hasBeenDelegatedToDynAnalysis())
-      return;
+    if (auto *VADE = dyn_cast<VerAddrDepEnd>(&VDE))
+      if (VADE->hasBeenDelegatedToDynAnalysis())
+        return;
 
     if (PrintedBrokenIDs.find(ID) != PrintedBrokenIDs.end())
       return;
@@ -2548,6 +2936,9 @@ void LKMMVerifier::printBrokenDeps() {
 
   for (auto &VADBP : *BrokenADBs)
     CheckDepPair(VADBP, BrokenADEs);
+
+  for (auto &VCDBP : *BrokenCDBs)
+    CheckDepPair(VCDBP, BrokenCDEs);
 }
 
 void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
@@ -2556,6 +2947,8 @@ void LKMMVerifier::printBrokenDep(VerDepHalf &Beg, VerDepHalf &End,
 
   if (isa<VerAddrDepBeg>(Beg))
     DepKindStr = "Address dependency";
+  else if (isa<VerCtrlDepBeg>(Beg))
+    DepKindStr = "Control dependency";
   else
     llvm_unreachable("Invalid beginning type when printing broken dependency.");
 
