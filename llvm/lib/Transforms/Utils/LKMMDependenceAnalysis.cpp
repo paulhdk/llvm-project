@@ -1771,6 +1771,7 @@ bool PotCtrlDepBeg::progressAndResolveCtrlPaths(
   // successors and continue. Otherwise, continue below.
   if (!recentlyDiscovered()) {
     // Erase paths which run through the current BB.
+    //
     // Only erase such paths if the current BB doesn't have a back edge or
     // contains a return. If it does, the path through the back edge /
     // reuturning block doesn't get resolved. Don't erase, only add successors.
@@ -1794,7 +1795,7 @@ bool PotCtrlDepBeg::progressAndResolveCtrlPaths(
     CtrlPaths.insert(S);
 
   // Account for the case where the condition has a backedge, e.g. in a do-while
-  // loop.
+  // loop. Such dependencies will not be resolved.
   if (HasBackEdges)
     CtrlPaths.insert(BB);
 
