@@ -534,10 +534,9 @@ public:
   /// \param HasBackEdges denotes whether any back edges start at \p BB.
   ///
   /// \returns true if the scope of this PotCtrlDepBeg has ended.
-  bool
-  progressCtrlPaths(BasicBlock *BB,
-                    std::unordered_set<BasicBlock *> *SuccessorsWOBackEdges,
-                    bool HasBackEdges);
+  bool progressAndResolveCtrlPaths(
+      BasicBlock *BB, std::unordered_set<BasicBlock *> *SuccessorsWOBackEdges,
+      bool HasBackEdges);
 
   /// Annotates a ctrl dependency from a given ending to this beginning.
   ///
@@ -1754,7 +1753,7 @@ bool PotAddrDepBeg::depChainsShareLink(
 // PotCtrlDepBeg Implementations
 //===----------------------------------------------------------------------===//
 
-bool PotCtrlDepBeg::progressCtrlPaths(
+bool PotCtrlDepBeg::progressAndResolveCtrlPaths(
     BasicBlock *BB, std::unordered_set<BasicBlock *> *SuccessorsWOBackEdges,
     bool HasBackEdges) {
 
@@ -1893,7 +1892,8 @@ void BFSCtx::handleCtrlPaths(BasicBlock *BB,
                              bool HasBackEdges) {
   for (auto CdbIt = CDBs.begin(), CdbEnd = CDBs.end(); CdbIt != CdbEnd;) {
     auto &CDB = CdbIt->second;
-    if (CDB.progressCtrlPaths(BB, SuccWoBack, HasBackEdges))
+
+    if (CDB.progressAndResolveCtrlPaths(BB, SuccWoBack, HasBackEdges))
       CdbIt = CDBs.erase(CdbIt);
     else
       ++CdbIt;
