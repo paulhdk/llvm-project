@@ -1906,18 +1906,18 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
   auto DCLEnd = DCLink(LoadI.getPointerOperand(), DCLevel::PTR);
   auto DCLAdd = DCLink(&LoadI, DCLevel::PTR);
 
-  // TODO outsource into seperate functions
+  auto CouldAnnotate = LoadI.isVolatile() && isa<AnnotCtx>(this);
+
+  // TODO: outsource into seperate functions
   for (auto &ADBP : ADBs) {
     auto &ADB = ADBP.second;
 
     depChainThroughInst(LoadI, DCLAdd, SmallVector<DCLink>{DCLCmp});
 
-    // FIXME: this gets checked every loop iteration.
-    if (LoadI.isVolatile())
-      if (isa<AnnotCtx>(this))
-        if (ADB.belongsToDepChain(BB, DCLEnd))
-          ADB.addDepAnnotation(ADStr, getInstLocString(&LoadI),
-                               getFullPath(&LoadI, true), &LoadI);
+    if (CouldAnnotate)
+      if (ADB.belongsToDepChain(BB, DCLEnd))
+        ADB.addDepAnnotation(ADStr, getInstLocString(&LoadI),
+                             getFullPath(&LoadI, true), &LoadI);
   }
 
   if (!LoadI.isVolatile())
