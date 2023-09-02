@@ -2343,6 +2343,8 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
       } else if (auto *VC = dyn_cast<VerCtx>(this)) {
         ++ADBPIt;
         VC->markIDAsVerified(ID);
+        // FIXME: can this cause false positives?
+        ADBs.erase(ID);
       }
       continue;
     }
