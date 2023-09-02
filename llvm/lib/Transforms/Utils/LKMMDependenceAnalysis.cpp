@@ -674,16 +674,7 @@ public:
     handleControlFlowInst(SwitchI, SwitchI.getCondition());
   }
 
-  void handleControlFlowInst(Instruction &BranchI, Value *Cond) {
-    DCLink DCLCond = DCLink(Cond, DCLevel::PTR);
-    for (auto &DBP : ADBs) {
-      auto &DB = DBP.second;
-
-      if (DB.belongsToDepChain(BB, DCLCond))
-        DB.addDepAnnotation(CFDStr, getInstLocString(&BranchI),
-                            getFullPathViaFiles(&BranchI), &BranchI);
-    }
-  }
+  void handleControlFlowInst(Instruction &BranchI, Value *Cond);
 
   /// Skipped.
   void visitIndirectBranchInst(IndirectBrInst &IndirectBrI) {}
@@ -2127,6 +2118,21 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
 
     DBsToBeReturned.push_back(RADB);
   }
+}
+
+void BFSCtx::handleControlFlowInst(Instruction &BranchI, Value *Cond) {
+  DCLink DCLCond = DCLink(Cond, DCLevel::PTR);
+  for (auto &DBP : DBs) {
+    auto &DB = DBP.second;
+
+    if (DB.belongsToDepChain(BB, DCLCond))
+      DB.addDepAnnotation(CFDStr, getInstLocString(&BranchI),
+                          getFullPathViaFiles(&BranchI), &BranchI);
+  }
+
+  if (auto *VC = dyn_cast<VerCtx>(this))
+    if (auto *MDAnnotation = BranchI.getMetadata("annotation"))
+      VC->handleDepAnnotations(&BranchI, MDAnnotation);
 }
 
 //===----------------------------------------------------------------------===//
