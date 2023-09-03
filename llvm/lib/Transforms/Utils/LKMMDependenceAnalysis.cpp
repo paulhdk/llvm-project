@@ -395,9 +395,6 @@ public:
   void addDepAnnotation(StringRef DepType, string ID2, string PathToViaFiles2,
                         Instruction *I2) const;
 
-  void addCtrlFlowDep(string ID2, string PathToViaFiles2,
-                      Instruction *I2) const;
-
   /// Prints the dep chain union. Used for debugging.
   ///
   /// \param BB the BB whose dep chain union should be printed.
@@ -599,7 +596,7 @@ public:
   CtxKind getKind() const { return Kind; }
 
   BFSCtx(BasicBlock *BB, CtxKind CK)
-      : BB(BB), ADBs(), CallPath(new CallPathStack()), InheritedADBs(),
+      : BB(BB), DBs(), CallPath(new CallPathStack()), InheritedDBs(),
         DBsToBeReturned(), Kind(CK){};
 
   virtual ~BFSCtx() {
@@ -947,7 +944,7 @@ public:
   /// on.
   void depChainThroughInst(Instruction &I, DCLink DCLAdd,
                            SmallVector<DCLink, 6> DCLCmps) {
-    for (auto &ADBP : ADBs) {
+    for (auto &ADBP : DBs) {
       auto &ADB = ADBP.second;
 
       // Check whether all cmp links are part of the dep chains in ADB.
@@ -1044,18 +1041,17 @@ protected:
   // we check before annotating if we have annotated a dependency
   // before.
   //
-  // All potential address dependency beginnings (ADBs) which are being
-  // tracked.
-  DepHalfMap<PotDepBeg> ADBs;
+  // All potential dependency beginnings which are being tracked.
+  DepHalfMap<PotDepBeg> DBs;
 
   // The path which the BFS took to reach BB.
   shared_ptr<CallPathStack> CallPath;
 
-  // IDs of the ADBs which ran into this function. Union of all levels of
-  // recursios.
-  unordered_set<string> InheritedADBs;
+  // IDs of the dependencies which ran into this function. Union of all levels
+  // of recursios.
+  unordered_set<string> InheritedDBs;
 
-  // IDs of the ADBs which ran into this function. Union of all levels of
+  // IDs of the DBs which ran into this function. Union of all levels of
   // recursios.
   InterprocBFSRes DBsToBeReturned;
 
@@ -1210,7 +1206,7 @@ protected:
   bool storeOverwritesDCValue(StoreInst &StoreI, PotDepBeg &PDB);
 
 private:
-  void addToInheritedADBs(string ID) { InheritedADBs.emplace(ID); }
+  void addToInheritedADBs(string ID) { InheritedDBs.emplace(ID); }
 
   const CtxKind Kind;
 };
@@ -1566,13 +1562,13 @@ void BFSCtx::runBFS() {
 
 void BFSCtx::progressAddrDepDCPaths(BasicBlock *BB, BasicBlock *SBB,
                                     BBtoBBSetMap &BEDsForBB) {
-  for (auto &ADBP : ADBs)
+  for (auto &ADBP : DBs)
     ADBP.second.progressDCPaths(BB, SBB, BEDsForBB);
 }
 
 void BFSCtx::deleteAddrDepDCsAt(BasicBlock *BB,
                                 unordered_set<BasicBlock *> &BEDs) {
-  for (auto &ADBP : ADBs)
+  for (auto &ADBP : DBs)
     ADBP.second.deleteDCsAt(BB, BEDs);
 }
 
@@ -1580,7 +1576,7 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
   SmallVector<pair<int, DCLevel>, 12> DepArgIndices;
   Function *CalledF = CallB->getCalledFunction();
 
-  for (auto It = ADBs.begin(); It != ADBs.end();) {
+  for (auto It = DBs.begin(); It != DBs.end();) {
     auto &ID = It->first;
     auto &ADB = It->second;
 
@@ -1606,7 +1602,7 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
       } else {
         DBsToBeReturned.push_back(make_shared<OverwrittenADB>(ADB));
         auto Del = It++;
-        ADBs.erase(Del);
+        DBs.erase(Del);
       }
     } else {
       // FIXME: Are we using outsideIDs?
@@ -1617,7 +1613,7 @@ void BFSCtx::handleDependentFunctionArgs(CallBase *CallB, BasicBlock *FirstBB) {
       // All PotAddrDepBeg's which don't run into the function are removed
       // from ADBs
       auto Del = It++;
-      ADBs.erase(Del);
+      DBs.erase(Del);
     }
 
     DepArgIndices.clear();
@@ -1828,32 +1824,32 @@ void BFSCtx::handleCall(CallBase &CallB) {
     auto ID = IRetAD->PDB.getID();
 
     if (auto *OvwrADB = dyn_cast<OverwrittenADB>(IRetAD.get())) {
-      assert(ADBs.find(ID) != ADBs.end() &&
+      assert(DBs.find(ID) != DBs.end() &&
              "Overwritten ADB not present in calling function!");
 
-      auto &ADB = ADBs.at(ID);
+      auto &ADB = DBs.at(ID);
 
       // FIXME: NOOPs?
       ADB.addStepToPathFrom(&CallB);
       ADB.addStepToPathFrom(&CallB, true);
 
-      if (InheritedADBs.find(ID) != InheritedADBs.end())
+      if (InheritedDBs.find(ID) != InheritedDBs.end())
         DBsToBeReturned.push_back(IRetAD);
 
-      ADBs.erase(ID);
+      DBs.erase(ID);
     } else if (auto *RADB = dyn_cast<ReturnedADB>(IRetAD.get())) {
       auto &Lvl = RADB->Lvl;
       if (Lvl != DCLevel::NORET) {
-        if (ADBs.find(ID) == ADBs.end()) {
-          ADBs.emplace(ID, std::move(RADB->PDB));
-          ADBs.at(ID).resetDCM(BB);
+        if (DBs.find(ID) == DBs.end()) {
+          DBs.emplace(ID, std::move(RADB->PDB));
+          DBs.at(ID).resetDCM(BB);
         }
 
-        assert(ADBs.find(ID) != ADBs.end() &&
+        assert(DBs.find(ID) != DBs.end() &&
                "returned ADB which wasn't discovered in function call not "
                "present in calling function's ADBs or InheritedADBs");
 
-        auto &ADB = ADBs.at(ID);
+        auto &ADB = DBs.at(ID);
 
         if (!RADB->DiscoveredInInterproc)
           ADB.addStepToPathFrom(&CallB);
@@ -1900,7 +1896,7 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
   auto CouldAnnotate = LoadI.isVolatile() && isa<AnnotCtx>(this);
 
   // TODO: outsource into seperate functions
-  for (auto &ADBP : ADBs) {
+  for (auto &ADBP : DBs) {
     auto &ADB = ADBP.second;
 
     depChainThroughInst(LoadI, DCLAdd, SmallVector<DCLink>{DCLCmp});
@@ -1920,7 +1916,7 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
   // Try to add new PotAddrDepBeg for volatile load
   auto ID = getFullPath(&LoadI);
 
-  if (ADBs.find(ID) == ADBs.end()) {
+  if (DBs.find(ID) == DBs.end()) {
     DepChain DC;
 
     Value *LoadVal = cast<Value>(&LoadI);
@@ -1928,8 +1924,8 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
     // A dep chain always starts at the level POINTER
     DC.insert(DCLink{LoadVal, DCLevel::PTR});
 
-    if (!ADBs.emplace(ID, PotDepBeg(&LoadI, LoadI.getParent(), std::move(DC),
-                                    ID, getFullPath(&LoadI, true)))
+    if (!DBs.emplace(ID, PotDepBeg(&LoadI, LoadI.getParent(), std::move(DC), ID,
+                                   getFullPath(&LoadI, true)))
              .second)
       errs() << "Couldn't insert new PotAddrDepBeg";
   }
@@ -1961,7 +1957,7 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
   auto DCLEnd = DCLink(StoreI.getPointerOperand(), DCLevel::PTR);
   auto DCLAdd = DCLink(StoreI.getPointerOperand(), DCLevel::PTE);
 
-  for (auto ADBPIt = ADBs.begin(); ADBPIt != ADBs.end();) {
+  for (auto ADBPIt = DBs.begin(); ADBPIt != DBs.end();) {
     auto &ID = ADBPIt->first;
     auto &ADB = ADBPIt->second;
 
@@ -1986,17 +1982,17 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
     if (storeOverwritesDCValue(StoreI, ADB)) {
       // If this dep chain runs interprocedurally, we need to make the
       // calling function aware of the overwrite
-      if (InheritedADBs.find(ID) != InheritedADBs.end())
+      if (InheritedDBs.find(ID) != InheritedDBs.end())
         DBsToBeReturned.push_back(make_shared<OverwrittenADB>(ADB));
 
       if (isa<AnnotCtx>(this)) {
         ++ADBPIt;
-        ADBs.erase(ID);
+        DBs.erase(ID);
       } else if (auto *VC = dyn_cast<VerCtx>(this)) {
         ++ADBPIt;
         VC->markIDAsVerified(ID);
         // FIXME: can this cause false positives?
-        ADBs.erase(ID);
+        DBs.erase(ID);
       }
       continue;
     }
@@ -2090,11 +2086,11 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
   auto RetLinkPTR = DCLink(RetVal, DCLevel::PTR);
   auto RetLinkPTE = DCLink(RetVal, DCLevel::PTE);
 
-  for (auto &ADBP : ADBs) {
+  for (auto &ADBP : DBs) {
     auto &ID = ADBP.first;
     auto &ADB = ADBP.second;
 
-    bool ADBDiscoverdInThisF = InheritedADBs.find(ID) == InheritedADBs.end();
+    bool ADBDiscoverdInThisF = InheritedDBs.find(ID) == InheritedDBs.end();
 
     auto RADB =
         make_shared<ReturnedADB>(ADB, DCLevel::NORET, ADBDiscoverdInThisF);
@@ -2218,7 +2214,7 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
   else
     llvm_unreachable("Non-store or non-load instruction in handleAddrDepID().");
 
-  auto PartOfADBs = ADBs.find(ID) != ADBs.end();
+  auto PartOfDBs = DBs.find(ID) != DBs.end();
   auto PartOfOutsideIDs = OutsideIDs.find(ID) != OutsideIDs.end();
 
   // FIXME: formatting looks very uncomfortable here
@@ -2242,20 +2238,20 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
     if (canBeDelegatedToDynAnalaysis(ID, IEnd))
       addPCSectionEntriesForDepOrdering(ID, IEnd, BDE);
 
-    if (PartOfADBs) {
-      auto &ADB = ADBs.at(ID);
+    if (PartOfDBs) {
+      auto &DB = DBs.at(ID);
       // Check for fully broken dependency chain
-      if (!ADB.belongsToDepChain(BB, DCLCmp)) {
+      if (!DB.belongsToDepChain(BB, DCLCmp)) {
         DepChain DC = {};
 
-        if (auto *DCU = ADB.getDCsAt(BB))
+        if (auto *DCU = DB.getDCsAt(BB))
           DC = *DCU;
 
         BDE = addBrokenEnding(
             VDB,
             VerDepEnd(IEnd, ID, getFullPath(IEnd), getFullPath(IEnd, true),
                       ParsedDepHalfID, ParsedPathToViaFiles, VDB.getDepKind()),
-            DC, BrokenBy);
+            DC, BrokenBy, BrokenDEs);
       } else
         return true;
     }
@@ -2269,10 +2265,9 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
                             {}, BrokenBy);
     }
 
-    if (BDE) {
+    if (BDE)
       if (canBeDelegatedToDynAnalaysis(ID, IEnd))
         addPCSectionEntriesForDepOrdering(ID, IEnd, BDE);
-    }
   }
   return false;
 }
@@ -2308,9 +2303,7 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       continue;
 
     auto &ParsedDepHalfID = AnnotData[2];
-    auto &ParsedPathToViaFiles = CurrentDepHalfStr.contains("ctrl dep begin")
-                                     ? AnnotData[4]
-                                     : AnnotData[3];
+    auto &ParsedPathToViaFiles = AnnotData[3];
 
     // Figure out if this is the instruction we originally attached the
     // annotation to. If it isn't, conintue.
@@ -2325,7 +2318,7 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
         continue;
 
     if (ParsedDepTypeStr.find("begin") != string::npos) {
-      if (ADBs.find(ParsedID) != ADBs.end())
+      if (DBs.find(ParsedID) != DBs.end())
         updateID(ParsedID);
 
       // For tracking the dependency chain, always add a PotAddrDepBeg
@@ -2333,8 +2326,8 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       // dependency or control dependency beginning.
       DepChain DC;
       DC.insert(DCLink(I, DCLevel::PTR));
-      ADBs.emplace(ParsedID, PotDepBeg(I, I->getParent(), std::move(DC),
-                                       ParsedID, getFullPath(I, true)));
+      DBs.emplace(ParsedID, PotDepBeg(I, I->getParent(), std::move(DC),
+                                      ParsedID, getFullPath(I, true)));
 
       // Assume broken until proven wrong.
       BrokenDBs->emplace(ParsedID,
