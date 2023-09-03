@@ -60,7 +60,7 @@
 
 namespace llvm {
 namespace {
-static cl::opt<bool> InjectBugs(
+static cl::opt<bool> LKMMDCTest(
     "lkmm-enable-tests",
     cl::desc("Enable the LKMM dependency checker tests. Requires the tests "
              "to be present in the source tree of the kernel being compiled"),
@@ -2480,7 +2480,7 @@ PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
     // Annotate dependencies.
     AC.runBFS();
 
-    if (InjectBugs) {
+    if (LKMMDCTest) {
       if (!F.hasName())
         continue;
 
