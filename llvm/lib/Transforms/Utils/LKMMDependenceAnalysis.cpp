@@ -1121,7 +1121,7 @@ protected:
     string PathStr{""};
 
     for (auto &CallI : *CallPath)
-      PathStr += (getInstLocString(CallI, ViaFiles) + "  ");
+      PathStr += (getInstLocString(CallI, ViaFiles) + "->");
 
     return PathStr;
   }
@@ -1909,7 +1909,7 @@ void BFSCtx::visitLoadInst(LoadInst &LoadI) {
 
     if (CouldAnnotate)
       if (ADB.belongsToDepChain(BB, DCLEnd))
-        ADB.addDepAnnotation(ADStr, getInstLocString(&LoadI),
+        ADB.addDepAnnotation(ADStr, getFullPath(&LoadI),
                              getFullPath(&LoadI, true), &LoadI);
   }
 
@@ -1969,7 +1969,7 @@ void BFSCtx::visitStoreInst(StoreInst &StoreI) {
 
     if (StoreI.isVolatile()) {
       if (isa<AnnotCtx>(this) && ADB.belongsToDepChain(BB, DCLEnd))
-        ADB.addDepAnnotation(ADStr, getInstLocString(&StoreI),
+        ADB.addDepAnnotation(ADStr, getFullPath(&StoreI),
                              getFullPath(&StoreI, true), &StoreI);
     }
 
@@ -2131,7 +2131,7 @@ void BFSCtx::handleControlFlowInst(Instruction &BranchI, Value *Cond) {
         auto &DB = DBP.second;
 
         if (DB.belongsToDepChain(BB, DCLCond))
-          DB.addDepAnnotation(CFDStr, getInstLocString(&BranchI),
+          DB.addDepAnnotation(CFDStr, getFullPath(&BranchI),
                               getFullPath(&BranchI, true), &BranchI);
       }
     }
