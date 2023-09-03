@@ -664,6 +664,8 @@ public:
   void visitBranchInst(BranchInst &BranchI) {
     if (BranchI.isConditional())
       handleControlFlowInst(BranchI, BranchI.getCondition());
+    else
+      handleControlFlowInst(BranchI, nullptr);
   }
 
   // TODO: Document
@@ -1329,8 +1331,9 @@ private:
   ///  \p Inst.
   ///
   /// \returns true if the address dependency could be verified.
-  bool wasADBPreserved(string const &ID, Instruction *IEnd,
-                       string &ParsedPathTo, string &ParsedPathToViaFiles);
+  bool wasDepPreserved(string const &ID, Instruction *IEnd,
+                       string &ParsedPathTo, string &ParsedPathToViaFiles,
+                       VerDepBeg::DepKind &DK);
 
   /// Responsible for updating an ID if the verification pass has encountered
   /// it before. Will add the updated ID to \p RemappedIDs.
@@ -2118,12 +2121,17 @@ void BFSCtx::visitReturnInst(ReturnInst &RetI) {
 
 void BFSCtx::handleControlFlowInst(Instruction &BranchI, Value *Cond) {
   DCLink DCLCond = DCLink(Cond, DCLevel::PTR);
-  for (auto &DBP : DBs) {
-    auto &DB = DBP.second;
 
-    if (DB.belongsToDepChain(BB, DCLCond))
-      DB.addDepAnnotation(CFDStr, getInstLocString(&BranchI),
-                          getFullPathViaFiles(&BranchI), &BranchI);
+  if (Cond) {
+    if (auto *VC = dyn_cast<AnnotCtx>(this)) {
+      for (auto &DBP : DBs) {
+        auto &DB = DBP.second;
+
+        if (DB.belongsToDepChain(BB, DCLCond))
+          DB.addDepAnnotation(CFDStr, getInstLocString(&BranchI),
+                              getFullPath(&BranchI), &BranchI);
+      }
+    }
   }
 
   if (auto *VC = dyn_cast<VerCtx>(this))
@@ -2202,15 +2210,21 @@ void AnnotCtx::insertBug(Function *F, Instruction::MemoryOps IOpCode,
 // VerCtx Implementations
 //===----------------------------------------------------------------------===//
 
-bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
+bool VerCtx::wasDepPreserved(string const &ID, Instruction *IEnd,
                              string &ParsedDepHalfID,
-                             string &ParsedPathToViaFiles) {
+                             string &ParsedPathToViaFiles,
+                             VerDepBeg::DepKind &DK) {
   auto DCLCmp = DCLink(nullptr, DCLevel::PTR);
 
   if (auto *SI = dyn_cast<StoreInst>(IEnd))
     DCLCmp.Val = SI->getPointerOperand();
   else if (auto *LI = dyn_cast<LoadInst>(IEnd))
     DCLCmp.Val = LI->getPointerOperand();
+  else if (auto *BI = dyn_cast<BranchInst>(IEnd)) {
+    if (BI->isConditional())
+      DCLCmp.Val = BI->getCondition();
+  } else if (auto *SI = dyn_cast<SwitchInst>(IEnd))
+    DCLCmp.Val = SI->getCondition();
   else
     llvm_unreachable("Non-store or non-load instruction in handleAddrDepID().");
 
@@ -2340,15 +2354,16 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
       // We consider ORIGINAL_ID verified; there only exists one dependency
       // in unoptimised IR, hence we only look for one dependency in
       // optimised IR.
-      if (wasADBPreserved(ParsedID, I, ParsedDepHalfID, ParsedPathToViaFiles)) {
+      if (wasDepPreserved(ParsedID, I, ParsedDepHalfID, ParsedPathToViaFiles,
+                          ParsedDepType)) {
         markIDAsVerified(ParsedID);
         continue;
       }
 
       if (RemappedIDs->find(ParsedID) != RemappedIDs->end()) {
         for (auto const &RemappedID : RemappedIDs->at(ParsedID)) {
-          if (wasADBPreserved(RemappedID, I, ParsedDepHalfID,
-                              ParsedPathToViaFiles)) {
+          if (wasDepPreserved(RemappedID, I, ParsedDepHalfID,
+                              ParsedPathToViaFiles, ParsedDepType)) {
             markIDAsVerified(ParsedID);
             break;
           }
