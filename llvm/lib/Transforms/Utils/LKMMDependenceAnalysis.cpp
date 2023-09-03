@@ -65,12 +65,6 @@ static cl::opt<bool> InjectBugs(
     cl::desc("Enable the LKMM dependency checker tests. Requires the tests "
              "to be present in the source tree of the kernel being compiled"),
     cl::Hidden, cl::init(false));
-
-static cl::opt<bool> FullToPartialOpt(
-    "enable-lkmm-addr-warnings",
-    cl::desc("Enable warnings for LKMM addr dependencies based on full to "
-             "partial addr dependency conversion"),
-    cl::Hidden, cl::init(false));
 } // namespace
 
 // Avoid the std:: qualifier if possible
