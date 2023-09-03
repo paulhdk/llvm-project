@@ -1246,10 +1246,13 @@ public:
 
 class VerCtx : public BFSCtx {
 public:
-  VerCtx(BasicBlock *BB, shared_ptr<DepHalfMap<VerDepBeg>> BrokenDBs,
-         shared_ptr<DepHalfMap<VerDepEnd>> BrokenDEs,
+  VerCtx(BasicBlock *BB, shared_ptr<DepHalfMap<VerDepBeg>> BrokenADBs,
+         shared_ptr<DepHalfMap<VerDepBeg>> BrokenCDBs,
+         shared_ptr<DepHalfMap<VerDepEnd>> BrokenADEs,
+         shared_ptr<DepHalfMap<VerDepEnd>> BrokenCDEs,
          shared_ptr<IDReMap> RemappedIDs, shared_ptr<VerIDSet> VerifiedIDs)
-      : BFSCtx(BB, CK_Ver), BrokenDBs(BrokenDBs), BrokenDEs(BrokenDEs),
+      : BFSCtx(BB, CK_Ver), BrokenADBs(BrokenADBs), BrokenCDBs(BrokenCDBs),
+        BrokenADEs(BrokenADEs), BrokenCDEs(BrokenCDEs),
         RemappedIDs(RemappedIDs), VerifiedIDs(VerifiedIDs) {}
 
   // Creates a VerCtx for exploring a called function.
@@ -1285,7 +1288,7 @@ public:
         }
     };
 
-    DelId(ParsedID, BrokenDBs, BrokenDEs, RemappedIDs);
+    DelId(ParsedID, BrokenADBs, BrokenADEs, RemappedIDs);
 
     VerifiedIDs->insert(ParsedID);
     RemappedIDs->erase(ParsedID);
@@ -1294,7 +1297,8 @@ public:
   void addToOutsideIDs(string ID) { OutsideIDs.insert(ID); }
 
   VerDepEnd *addBrokenEnding(VerDepBeg VADB, VerDepEnd VADE, DepChain DC,
-                             VerDepBeg::BrokenByType BrokenBy) {
+                             VerDepBeg::BrokenByType BrokenBy,
+                             shared_ptr<DepHalfMap<VerDepEnd>> &BrokenDEs) {
     VADB.setDCP(DC);
 
     VADE.setBrokenBy(BrokenBy);
@@ -1307,10 +1311,13 @@ public:
   static bool classof(const BFSCtx *C) { return C->getKind() == CK_Ver; }
 
 private:
-  // Contains all unverified address dependency beginning annotations.
-  shared_ptr<DepHalfMap<VerDepBeg>> BrokenDBs;
-  // Contains all unverified address dependency ending annotations.
-  shared_ptr<DepHalfMap<VerDepEnd>> BrokenDEs;
+  // Contains all unverified dependency beginning annotations.
+  shared_ptr<DepHalfMap<VerDepBeg>> BrokenADBs;
+  shared_ptr<DepHalfMap<VerDepBeg>> BrokenCDBs;
+
+  // Contains all unverified dependency ending annotations.
+  shared_ptr<DepHalfMap<VerDepEnd>> BrokenADEs;
+  shared_ptr<DepHalfMap<VerDepEnd>> BrokenCDEs;
 
   // All remapped IDs which were discovered from the current root function.
   shared_ptr<IDReMap> RemappedIDs;
@@ -1360,7 +1367,7 @@ private:
   void addPCSectionEntriesForDepOrdering(string ID, Instruction *IEnd,
                                          VerDepEnd *BADE) {
     errs() << "Adding PC section\n";
-    auto *IBeg = BrokenDBs->at(ID).getInst();
+    auto *IBeg = BrokenADBs->at(ID).getInst();
 
     auto *LLVMCtx = &IEnd->getFunction()->getContext();
     auto IRB = IRBuilder(*LLVMCtx);
@@ -2236,7 +2243,10 @@ bool VerCtx::wasDepPreserved(string const &ID, Instruction *IEnd,
   // BFS has seen the beginning ID. If we were to add unconditionally, we
   // might add endings which aren't actually reachable by the corresponding.
   // Such cases would then be false positivies.
-  if (PartOfADBs || PartOfOutsideIDs) {
+  if (PartOfDBs || PartOfOutsideIDs || !DCLCmp.Val) {
+    auto &BrokenDBs = DK == VerDepBeg::DepKind::Addr ? BrokenADBs : BrokenCDBs;
+    auto &BrokenDEs = DK == VerDepBeg::DepKind::Addr ? BrokenADEs : BrokenCDEs;
+
     // We have to account for the fact that annotations might get removed
     // for example and therefore we might not have seen the corresponding
     // beginning annotation.
@@ -2244,6 +2254,9 @@ bool VerCtx::wasDepPreserved(string const &ID, Instruction *IEnd,
       return false;
 
     auto &VDB = BrokenDBs->at(ID);
+
+    // XXX: Constant assignment since we don't support identifying more
+    // breakages yet.
     auto BrokenBy = VerDepBeg::BrokenDC;
     VerDepEnd *BDE = nullptr;
 
@@ -2270,13 +2283,13 @@ bool VerCtx::wasDepPreserved(string const &ID, Instruction *IEnd,
         return true;
     }
 
-    if (PartOfOutsideIDs) {
+    if (PartOfOutsideIDs || !DCLCmp.Val) {
       auto &DB = BrokenDBs->at(ID);
       BDE = addBrokenEnding(DB,
                             VerDepEnd(IEnd, ID, getFullPath(IEnd),
                                       getFullPath(IEnd, true), ParsedDepHalfID,
                                       ParsedPathToViaFiles, DB.getDepKind()),
-                            {}, BrokenBy);
+                            {}, BrokenBy, BrokenDEs);
     }
 
     if (BDE)
@@ -2344,10 +2357,16 @@ void VerCtx::handleDepAnnotations(Instruction *I, MDNode *MDAnnotation) {
                                       ParsedID, getFullPath(I, true)));
 
       // Assume broken until proven wrong.
-      BrokenDBs->emplace(ParsedID,
-                         VerDepBeg(I, nullptr, {}, ParsedID, getFullPath(I),
-                                   getFullPath(I, true), ParsedDepHalfID,
-                                   ParsedPathToViaFiles, ParsedDepType));
+      if (ParsedDepType == VerDepBeg::DepKind::Addr)
+        BrokenADBs->emplace(ParsedID,
+                            VerDepBeg(I, nullptr, {}, ParsedID, getFullPath(I),
+                                      getFullPath(I, true), ParsedDepHalfID,
+                                      ParsedPathToViaFiles, ParsedDepType));
+      else if (ParsedDepType == VerDepBeg::DepKind::CtrlFlow)
+        BrokenCDBs->emplace(ParsedID,
+                            VerDepBeg(I, nullptr, {}, ParsedID, getFullPath(I),
+                                      getFullPath(I, true), ParsedDepHalfID,
+                                      ParsedPathToViaFiles, ParsedDepType));
     } else if (ParsedDepTypeStr.find("end") != string::npos) {
       // If we are able to verify one pair in
       // {ORIGINAL_ID} \cup REMAPPED_IDS.at(ORIGINAL_ID) x {ORIGINAL_ID}
@@ -2385,11 +2404,13 @@ public:
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 
 private:
-  // Contains all unverified address dependency beginning annotations.
-  shared_ptr<DepHalfMap<VerDepBeg>> BrokenDBs;
+  // Contains all unverified dependency beginning annotations.
+  shared_ptr<DepHalfMap<VerDepBeg>> BrokenADBs;
+  shared_ptr<DepHalfMap<VerDepBeg>> BrokenCDBs;
 
-  // Contains all unverified address dependency ending annotations.
-  shared_ptr<DepHalfMap<VerDepEnd>> BrokenDEs;
+  // Contains all unverified dependency ending annotations.
+  shared_ptr<DepHalfMap<VerDepEnd>> BrokenADEs;
+  shared_ptr<DepHalfMap<VerDepEnd>> BrokenCDEs;
 
   shared_ptr<IDReMap> RemappedIDs;
 
@@ -2410,7 +2431,8 @@ private:
 
   void printBrokenDep(VerDepBeg &Beg, VerDepBeg &End, const string &ID);
 
-  void onlyPrintShortestDep() {
+  void onlyPrintShortestDep(shared_ptr<DepHalfMap<VerDepBeg>> BrokenDBs,
+                            shared_ptr<DepHalfMap<VerDepEnd>> BrokenDEs) {
     for (auto VADBPIt = BrokenDBs->begin(); VADBPIt != BrokenDBs->end();) {
       auto RdcdID = VADBPIt->first;
       string OgID = VADBPIt->first;
@@ -2497,8 +2519,10 @@ PreservedAnalyses LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
 }
 
 LKMMVerifier::LKMMVerifier()
-    : BrokenDBs(std::make_shared<DepHalfMap<VerDepBeg>>()),
-      BrokenDEs(std::make_shared<DepHalfMap<VerDepEnd>>()),
+    : BrokenADBs(std::make_shared<DepHalfMap<VerDepBeg>>()),
+      BrokenCDBs(std::make_shared<DepHalfMap<VerDepBeg>>()),
+      BrokenADEs(std::make_shared<DepHalfMap<VerDepEnd>>()),
+      BrokenCDEs(std::make_shared<DepHalfMap<VerDepEnd>>()),
       RemappedIDs(std::make_shared<IDReMap>()),
       VerifiedIDs(std::make_shared<unordered_set<string>>()),
       PrintedBrokenIDs(), PrintedModules() {}
@@ -2508,13 +2532,14 @@ PreservedAnalyses LKMMVerifier::run(Module &M, ModuleAnalysisManager &AM) {
     if (F.empty())
       continue;
 
-    auto VC =
-        VerCtx(&*F.begin(), BrokenDBs, BrokenDEs, RemappedIDs, VerifiedIDs);
+    auto VC = VerCtx(&*F.begin(), BrokenADBs, BrokenCDBs, BrokenADEs,
+                     BrokenCDEs, RemappedIDs, VerifiedIDs);
 
     VC.runBFS();
   }
 
-  onlyPrintShortestDep();
+  onlyPrintShortestDep(BrokenADBs, BrokenADEs);
+  onlyPrintShortestDep(BrokenCDBs, BrokenCDEs);
 
   printBrokenDeps();
 
@@ -2550,8 +2575,10 @@ void LKMMVerifier::printBrokenDeps() {
     printBrokenDep(VDB, VDE, ID);
   };
 
-  for (auto &VADBP : *BrokenDBs)
-    CheckDepPair(VADBP, BrokenDEs);
+  for (auto &VADBP : *BrokenADBs)
+    CheckDepPair(VADBP, BrokenADEs);
+  for (auto &VADBP : *BrokenCDBs)
+    CheckDepPair(VADBP, BrokenCDEs);
 }
 
 void LKMMVerifier::printBrokenDep(VerDepBeg &Beg, VerDepBeg &End,
