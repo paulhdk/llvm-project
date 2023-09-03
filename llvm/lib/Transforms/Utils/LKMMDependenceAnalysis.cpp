@@ -488,9 +488,6 @@ public:
 
   string const &getParsedID() const { return ParsedID; }
 
-  void setDCP(DepChain DC) { this->DC = DC; }
-  DepChain &getDC() { return DC; }
-
   string getID() const { return getParsedID(); }
 
   DepKind getDepKind() const { return DK; }
@@ -518,10 +515,6 @@ private:
   const string ParsedDepHalfID;
 
   const string ParsedPathToViaFiles;
-
-  // Gets populated at the end of the BFS and is used for printing the dep
-  // chain to users.
-  DepChain DC;
 
   const DepKind DK;
 };
@@ -1304,8 +1297,6 @@ public:
   VerDepEnd *addBrokenEnding(VerDepBeg VADB, VerDepEnd VADE, DepChain DC,
                              VerDepBeg::BrokenByType BrokenBy,
                              shared_ptr<DepHalfMap<VerDepEnd>> &BrokenDEs) {
-    VADB.setDCP(DC);
-
     VADE.setBrokenBy(BrokenBy);
 
     auto R = BrokenDEs->emplace(VADB.getID(), std::move(VADE));
@@ -2607,59 +2598,6 @@ void LKMMVerifier::printBrokenDep(VerDepBeg &Beg, VerDepBeg &End,
          << End.getParsedpathTOViaFiles() << "\n";
 
   errs() << "\nBroken " << End.getBrokenBy() << "\n\n";
-
-  if (auto *VADB = dyn_cast<VerDepBeg>(&Beg)) {
-    auto &DCUnion = VADB->getDC();
-
-    errs() << "Soure-level dep chains at " << getInstLocString(End.getInst())
-           << "\n";
-
-    errs() << "\nUnion of all dependency chains at the ending:\n";
-    for (auto &DCL : DCUnion)
-      errs() << getInstLocString(cast<Instruction>(DCL.Val)) << "\n";
-  }
-
-#define DEBUG_TYPE "lkmm-print-modules"
-  LLVM_DEBUG(
-      if (auto *VADB = dyn_cast<VerDepBeg>(&Beg)) {
-        auto &DC = VADB->getDC();
-
-        dbgs() << "IR Dep chains at ";
-        End.getInst()->print(dbgs());
-        dbgs() << "\n";
-
-        dbgs() << "\nUnion of all dependency chains at the ending:\n";
-        for (auto &DCL : DC) {
-          DCL.Val->print(dbgs());
-          dbgs() << "\n";
-        }
-      }
-
-          dbgs()
-          << "\nFirst access in optimised IR\n\n"
-          << "inst:\n\t";
-
-      Beg.getInst()->print(dbgs());
-
-      dbgs() << "\noptimised IR function:\n\t"
-             << Beg.getInst()->getFunction()->getName() << "\n\n";
-
-      dbgs() << "\nSecond access in optimised IR\n\n"
-             << "inst:\n\t";
-
-      End.getInst()->print(dbgs());
-
-      dbgs() << "\nOptimised IR function:\n\t"
-             << End.getInst()->getFunction()->getName() << "\n\n";
-
-      if (PrintedModules.find(Beg.getInst()->getModule()) ==
-          PrintedModules.end()) {
-        dbgs() << "Optimised IR module:\n";
-        Beg.getInst()->getModule()->print(dbgs(), nullptr);
-
-        PrintedModules.insert(Beg.getInst()->getModule());
-      });
-#undef DEBUG_TYPE
 
   errs() << "//"
             "===----------------------------------------------------------"
