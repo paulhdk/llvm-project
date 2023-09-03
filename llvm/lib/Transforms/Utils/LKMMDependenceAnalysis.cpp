@@ -2129,7 +2129,7 @@ void BFSCtx::handleControlFlowInst(Instruction &BranchI, Value *Cond) {
 
         if (DB.belongsToDepChain(BB, DCLCond))
           DB.addDepAnnotation(CFDStr, getInstLocString(&BranchI),
-                              getFullPath(&BranchI), &BranchI);
+                              getFullPath(&BranchI, true), &BranchI);
       }
     }
   }
