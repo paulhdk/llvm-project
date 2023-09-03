@@ -65,6 +65,12 @@ static cl::opt<bool> LKMMDCTest(
     cl::desc("Enable the LKMM dependency checker tests. Requires the tests "
              "to be present in the source tree of the kernel being compiled"),
     cl::Hidden, cl::init(false));
+
+static cl::opt<bool>
+    LKMMDCCtrlFlowDeps("lkmm-enable-ctrl-flow-deps",
+                       cl::desc("Enable control-flow dependnecy support for "
+                                "the LKMM DepChecker. (experimental)"),
+                       cl::Hidden, cl::init(false));
 } // namespace
 
 // Avoid the std:: qualifier if possible
@@ -656,6 +662,9 @@ public:
 
   // TODO: Document
   void visitBranchInst(BranchInst &BranchI) {
+    if (!LKMMDCCtrlFlowDeps)
+      return;
+
     if (BranchI.isConditional())
       handleControlFlowInst(BranchI, BranchI.getCondition());
     else
@@ -664,6 +673,8 @@ public:
 
   // TODO: Document
   void visitSwitchInst(SwitchInst &SwitchI) {
+    if (!LKMMDCCtrlFlowDeps)
+      return;
     handleControlFlowInst(SwitchI, SwitchI.getCondition());
   }
 
