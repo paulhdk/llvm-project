@@ -67,10 +67,10 @@ static cl::opt<bool> LKMMDCTest(
     cl::Hidden, cl::init(false));
 
 static cl::opt<bool>
-    LKMMDCCtrlFlowDeps("lkmm-enable-ctrl-flow-deps",
-                       cl::desc("Enable control-flow dependnecy support for "
-                                "the LKMM DepChecker. (experimental)"),
-                       cl::Hidden, cl::init(false));
+    LKMMDCCtrlDeps("lkmm-enable-ctrl-deps",
+                   cl::desc("Enable control dependnecy support for "
+                            "the LKMM DepChecker. (Experimental)"),
+                   cl::Hidden, cl::init(false));
 } // namespace
 
 // Avoid the std:: qualifier if possible
@@ -115,6 +115,9 @@ template <typename T> using DepHalfMap = unordered_map<string, T>;
 ///
 /// EMPTY -> Empty.
 enum class DCLevel { PTR, PTE, BOTH, NORET, EMPTY };
+
+// TODO: Document
+enum BrokenByType { BrokenDC };
 
 /// Represents a dependency chain link. A dep chain link consists of an IR
 /// value and the corresponding dep chain level.
@@ -240,12 +243,8 @@ struct BFSBBInfo {
 
 class PotDepBeg {
 public:
-  PotDepBeg(Instruction *I, BasicBlock *BB, DepChain DC, string ID,
-            string PathToViaFiles)
-      : I(I), ID(ID), PathToViaFiles(PathToViaFiles), PathFrom("\n"), DCM() {
-    DCM.insert(pair<BasicBlock *, DepChain>{BB, DC});
-  };
-
+  PotDepBeg(Instruction *I, string ID, string PathToViaFiles)
+      : I(I), ID(ID), PathToViaFiles(PathToViaFiles){};
   /// Returns the ID of this DepHalf.
   ///
   /// \returns the DepHalf's ID.
@@ -259,10 +258,48 @@ public:
   ///  to discover this DepHalf.
   string getPathToViaFiles() const { return PathToViaFiles; }
 
-  /// Returns a string representation of the path the annotation pass has taken
-  /// since seeing this dependency half.
+  /// Checks whether this PotAddrDepBeg begins at a given instruction.
   ///
-  /// \returns a string representation of the path the annotation pass took
+  /// \param I the instruction to be checked.
+  ///
+  /// \returns true if \p this begins at \p I.
+  bool beginsAt(Instruction *I) const { return I == this->I; }
+
+  /// Returns the instruction where this dependency begins.
+  ///
+  /// \returns the instruction where the dependency begins.
+  Instruction *getInst() { return I; }
+
+  virtual ~PotDepBeg() {}
+
+protected:
+  // Instruction which this potential dependency beginning / ending relates
+  // to.
+  Instruction *const I;
+
+  // An ID which makes this dependency half unique and is used for annotation
+  // / verification of dependencies. IDs are represented by a string
+  // representation of the calls the BFS took to reach Inst, including inst,
+  // and are assumed to be unique within the BFS.
+  const string ID;
+
+  const string PathToViaFiles;
+
+  bool Delegated;
+};
+
+class PotAddrDepBeg : PotDepBeg {
+public:
+  PotAddrDepBeg(Instruction *I, string ID, string PathToViaFiles,
+                BasicBlock *BB, DepChain DC)
+      : PotDepBeg(I, ID, PathToViaFiles), DCM(), PathFrom("\n") {
+    DCM.insert(pair<BasicBlock *, DepChain>{BB, DC});
+  }
+  /// Returns a string representation of the path the annotation pass has
+  /// taken since seeing this dependency half.
+  ///
+  /// \returns a string representation of the path the annotation pass
+  /// took
   ///  since discovering this DepHalf.
   string getPathFrom() const { return PathFrom; }
 
@@ -325,13 +362,6 @@ public:
 
     DCM[BB].remove(DCL);
   }
-
-  /// Checks whether this PotAddrDepBeg begins at a given instruction.
-  ///
-  /// \param I the instruction to be checked.
-  ///
-  /// \returns true if \p this begins at \p I.
-  bool beginsAt(Instruction *I) const { return I == this->I; }
 
   /// Checks whether all DepChains of this PotAddrDepBeg are at a given
   /// BasicBlock. Useful for interprocedural analysis as it helps determine
@@ -423,9 +453,7 @@ public:
       DCM.insert(pair<BasicBlock *, DepChain>{ToBB, DepChain{}});
   }
 
-  Instruction *getInst() { return I; }
-
-protected:
+private:
   /// Helper function for progressDCPaths(). Used for computing an
   /// intersection of dep chains.
   ///
@@ -436,40 +464,97 @@ protected:
   /// \returns true if \p V is present in all of \p DCs' dep chains.
   bool depChainsShareLink(list<pair<BasicBlock *, DepChain *>> &DCs,
                           const DCLink &DCL) const;
-
-  // Instruction which this potential dependency beginning / ending relates
-  // to.
-  Instruction *const I;
-
-  // An ID which makes this dependency half unique and is used for annotation
-  // / verification of dependencies. IDs are represented by a string
-  // representation of the calls the BFS took to reach Inst, including inst,
-  // and are assumed to be unique within the BFS.
-  const string ID;
-
-  // FIXME: can this be removed?
-  const string PathToViaFiles;
-
-  string PathFrom;
-
-  bool Delegated;
-
   /// Maps BasicBlocks to their respective dep chain unions.
   DepChainMap DCM;
+
+  string PathFrom;
 };
 
-class VerDepBeg : public PotDepBeg {
+class CtrlDepScope : PotDepBeg {
 public:
-  enum DepKind { Unknown, Addr, CtrlFlow };
+  // Copy constructor for constructing a PotCtrlDep from a PotAddrDep. As
+  // PotCtrlDep require the existence of a DepChain to a READ_ONCE(), marking
+  // their beginning, there is no other way of constructing a PotCtrlDepBeg.
+  CtrlDepScope(PotDepBeg &PDB, std::string BranchID, bool Resolvable = true)
+      : CtrlDepScope(PDB.getInst(), PDB.getID(), PDB.getPathToViaFiles(),
+                     BranchID, Resolvable) {}
 
-  VerDepBeg(Instruction *I, BasicBlock *BB, DepChain DC, string ParsedID,
-            string DepHalfID, string PathToViaFiles, string ParsedDepHalfID,
-            string ParsedPathToViaFiles, DepKind DK)
-      : PotDepBeg(I, BB, DC, DepHalfID, PathToViaFiles), ParsedID(ParsedID),
+  /// Checks whether this PotCtrlDepBeg was recently discovered,
+  /// i.e. if it doesn't maintain any paths yet.
+  ///
+  /// \returns true if this PotCtrlDepBeg was recently discovered.
+  bool recentlyDiscovered() const { return CtrlPaths.empty(); }
+
+  /// Updates the PotCtrlDepBeg to be unresolvable. This might be the case when
+  /// not all ctrl paths carry over to a called function. Within the context(s)
+  /// of the called function (and beyond), the PotCtrlDepBeg cannot be resolved
+  /// as some CtrlPaths still reside in the calling function.
+  void setCannotResolve() { Resolvable = false; }
+
+  /// Checks if the PotCtrlDepBeg can be resolved right now.
+  ///
+  /// \returns true if it can be resolved.
+  bool canResolve() const { return Resolvable; }
+
+  /// Checks if this PotCtrlDepBeg has ctrl paths whose heads are at \p BB right
+  /// now.
+  ///
+  /// \returns true if a ctrl path is at \p BB.
+  bool isAt(BasicBlock *BB) const {
+    return CtrlPaths.find(BB) != CtrlPaths.end();
+  }
+  /// Returns a string representation of the location of the branch instruction.
+  ///
+  /// \returns a string representation of location of the branch instruction.
+  std::string const &getBranchID() const { return BranchID; };
+  /// Maintains the ctrl paths at this PotCtrlDepBeg.
+  ///
+  /// \param BB the BB the BFS just ran on.
+  /// \param SuccessorsWOBackEdges all successors of BB which are not
+  ///  connected through back edges.
+  /// \param HasBackEdges denotes whether any back edges start at \p BB.
+  ///
+  /// \returns true if the scope of this PotCtrlDepBeg has ended.
+  bool progressAndResolveCtrlPaths(
+      BasicBlock *BB, std::unordered_set<BasicBlock *> *SuccessorsWOBackEdges,
+      bool HasBackEdges);
+
+  /// Annotates a ctrl dependency from a given ending to this beginning.
+  ///
+  /// \param PathTo2 the path the annotation pass took to discover \p I2.
+  /// \param PathToViaFiles2 the path the annotation pass took to discover \p
+  /// I2. \param I2 the instruction where the ctrl dependency ends.
+  void addCtrlDep(std::string ID2, std::string PathToViaFiles2,
+                  Instruction *I2) const;
+
+private:
+  /// A string representation of the branch instruction's location
+  const std::string BranchID;
+
+  // Set to true if this PotCtrlDepBeg cannot be resolved
+  // in the current function, e.g. because the branch inst is located in a
+  // function which calls the current function.
+  bool Resolvable;
+
+  // The set of paths which are induced by the branch instruction. Paths
+  // are represented by their 'head', i.e. the BB they are currently at as per
+  // the BFS.
+  std::unordered_set<BasicBlock *> CtrlPaths;
+
+  CtrlDepScope(Instruction *I, std::string BegID, std::string PathToViaFiles,
+               std::string BranchID, bool Resolvable = true)
+      : PotDepBeg(I, BegID, PathToViaFiles), BranchID{BranchID},
+        Resolvable{Resolvable}, CtrlPaths(){};
+};
+
+class AnnotAddrDepEnd : PotAddrDepBeg {
+public:
+  VerAddrDepBeg(Instruction *I, BasicBlock *BB, DepChain DC, string ParsedID,
+                string DepHalfID, string PathToViaFiles, string ParsedDepHalfID,
+                string ParsedPathToViaFiles)
+      : PotAddrDepBeg(I, DepHalfID, PathToViaFiles, BB, DC), ParsedID(ParsedID),
         ParsedDepHalfID(ParsedDepHalfID),
         ParsedPathToViaFiles{ParsedPathToViaFiles}, DK(DK) {}
-
-  enum BrokenByType { BrokenDC };
 
   void setBrokenBy(BrokenByType BB) { BrokenBy = BB; }
 
@@ -655,7 +740,7 @@ public:
 
   // TODO: Document
   void visitBranchInst(BranchInst &BranchI) {
-    if (!LKMMDCCtrlFlowDeps)
+    if (!LKMMDCCtrlDeps)
       return;
 
     if (BranchI.isConditional())
@@ -666,7 +751,7 @@ public:
 
   // TODO: Document
   void visitSwitchInst(SwitchInst &SwitchI) {
-    if (!LKMMDCCtrlFlowDeps)
+    if (!LKMMDCCtrlDeps)
       return;
     handleControlFlowInst(SwitchI, SwitchI.getCondition());
   }
@@ -1041,8 +1126,11 @@ protected:
   // we check before annotating if we have annotated a dependency
   // before.
   //
-  // All potential dependency beginnings which are being tracked.
-  DepHalfMap<PotDepBeg> DBs;
+  // All potential dependency beginnings which are being tracked, i.e.
+  // dependency chains.
+  DepHalfMap<PotAddrDepBeg> DBs;
+  // All potential control dependency branches which are being tracked.
+  DepHalfMap<PotDepBeg> CDBs;
 
   // The path which the BFS took to reach BB.
   shared_ptr<CallPathStack> CallPath;
@@ -1393,8 +1481,8 @@ private:
 // PotAddrDepBeg Implementations
 //===----------------------------------------------------------------------===//
 
-void PotDepBeg::progressDCPaths(BasicBlock *BB, BasicBlock *SBB,
-                                BBtoBBSetMap &BEDsForBB) {
+void PotAddrDepBeg::progressDCPaths(BasicBlock *BB, BasicBlock *SBB,
+                                    BBtoBBSetMap &BEDsForBB) {
   if (!isAt(BB))
     return;
 
@@ -1448,15 +1536,15 @@ void PotDepBeg::deleteDCsAt(BasicBlock *BB, unordered_set<BasicBlock *> &BEDs) {
     DCM.erase(BB);
 }
 
-void PotDepBeg::addToDCUnion(BasicBlock *BB, DCLink DCL) {
+void PotAddrDepBeg::addToDCUnion(BasicBlock *BB, DCLink DCL) {
   if (isa<ConstantData>(DCL.Val) || !isAt(BB))
     return;
 
   DCM[BB].insert(DCL);
 }
 
-void PotDepBeg::tryAddValueToDepChains(Instruction &I, DCLink DCLAdd,
-                                       DCLink DCLCmp) {
+void PotAddrDepBeg::tryAddValueToDepChains(Instruction &I, DCLink DCLAdd,
+                                           DCLink DCLCmp) {
   // FIXME: How can this check be made redundant?
   assert(DCLAdd.Lvl != DCLevel::BOTH &&
          "Called tryAddLinkToDepChains() with invalid level for DCAdd.");
@@ -1477,7 +1565,7 @@ void PotDepBeg::tryAddValueToDepChains(Instruction &I, DCLink DCLAdd,
     DC.insert(DCLAdd);
 }
 
-bool PotDepBeg::belongsToDepChain(BasicBlock *BB, DCLink DCLCmp) {
+bool PotAddrDepBeg::belongsToDepChain(BasicBlock *BB, DCLink DCLCmp) {
   // FIXME: How can we make this redundant?
   assert(DCLCmp.Lvl != DCLevel::BOTH &&
          "Called belongsToDepChain() with DCLevel::BOTH.");
@@ -1490,9 +1578,9 @@ bool PotDepBeg::belongsToDepChain(BasicBlock *BB, DCLink DCLCmp) {
   return DC.contains(DCLCmp);
 }
 
-void PotDepBeg::addDepAnnotation(StringRef DepType, string ID2,
-                                 string PathToViaFiles2,
-                                 Instruction *I2) const {
+void PotAddrDepBeg::addDepAnnotation(StringRef DepType, string ID2,
+                                     string PathToViaFiles2,
+                                     Instruction *I2) const {
   // TODO: refactor into generateIDs(), addAnnotations(), addPCs()
   auto DepID = getInstLocString(I) + PathFrom + ID2;
 
@@ -1511,8 +1599,8 @@ void PotDepBeg::addDepAnnotation(StringRef DepType, string ID2,
   I2->addAnnotationMetadata(EndAnnotStr);
 }
 
-bool PotDepBeg::depChainsShareLink(list<pair<BasicBlock *, DepChain *>> &DCs,
-                                   const DCLink &DCL) const {
+bool PotAddrDepBeg::depChainsShareLink(
+    list<pair<BasicBlock *, DepChain *>> &DCs, const DCLink &DCL) const {
   for (auto &DCP : DCs)
     if (DCP.second->contains(DCL))
       return false;
