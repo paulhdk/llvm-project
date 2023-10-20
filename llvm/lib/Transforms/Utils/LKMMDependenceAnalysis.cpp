@@ -2247,7 +2247,8 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
 
     // FIXME: This call is only necessary for debugging since it will delegate
     // non-broken dependencies.
-    if (canBeDelegatedToDynAnalaysis(ID, IEnd))
+    if (canBeDelegatedToDynAnalaysis(ID, IEnd) &&
+        (!BADE || !BADE->hasBeenDelegatedToDynAnalysis()))
       addPCSectionEntriesForDepOrdering(ID, IEnd, BADE);
 
     if (PartOfADBs) {
@@ -2277,7 +2278,8 @@ bool VerCtx::wasADBPreserved(string const &ID, Instruction *IEnd,
     }
 
     if (BADE) {
-      if (canBeDelegatedToDynAnalaysis(ID, IEnd))
+      if (canBeDelegatedToDynAnalaysis(ID, IEnd) &&
+          !BADE->hasBeenDelegatedToDynAnalysis())
         addPCSectionEntriesForDepOrdering(ID, IEnd, BADE);
     }
   }
