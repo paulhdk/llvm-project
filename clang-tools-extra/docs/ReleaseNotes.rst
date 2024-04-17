@@ -110,6 +110,12 @@ Changes in existing checks
   <clang-tidy/checks/misc/redundant-expression>` check by providing additional
   examples and fixing some macro related false positives.
 
+- New :doc:`cppcoreguidelines-avoid-bounds-errors
+  <clang-tidy/checks/cppcoreguidelines/avoid-bounds-errors>` check.
+
+  Flags the unsafe `operator[]` and replaces it with `at()`.
+
+
 Removed checks
 ^^^^^^^^^^^^^^
 
