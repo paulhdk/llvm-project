@@ -113,7 +113,7 @@ Changes in existing checks
 - New :doc:`cppcoreguidelines-avoid-bounds-errors
   <clang-tidy/checks/cppcoreguidelines/avoid-bounds-errors>` check.
 
-  Flags the unsafe `operator[]` and replaces it with `at()`.
+  Flags the unsafe ``operator[]`` and replaces it with ``at()``.
 
 
 Removed checks
