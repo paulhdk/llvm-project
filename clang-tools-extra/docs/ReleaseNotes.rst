@@ -110,10 +110,42 @@ Changes in existing checks
   <clang-tidy/checks/misc/redundant-expression>` check by providing additional
   examples and fixing some macro related false positives.
 
-- New :doc:`cppcoreguidelines-avoid-bounds-errors
-  <clang-tidy/checks/cppcoreguidelines/avoid-bounds-errors>` check.
+- New :doc:`bugprone-crtp-constructor-accessibility
+  <clang-tidy/checks/bugprone/crtp-constructor-accessibility>` check.
 
-  Flags the unsafe ``operator[]`` and replaces it with ``at()``.
+  Detects error-prone Curiously Recurring Template Pattern usage, when the CRTP
+  can be constructed outside itself and the derived class.
+
+- New :doc:`bugprone-return-const-ref-from-parameter
+  <clang-tidy/checks/bugprone/return-const-ref-from-parameter>` check.
+
+  Detects return statements that return a constant reference parameter as constant
+  reference. This may cause use-after-free errors if the caller uses xvalues as
+  arguments.
+
+- New :doc:`bugprone-suspicious-stringview-data-usage
+  <clang-tidy/checks/bugprone/suspicious-stringview-data-usage>` check.
+
+  Identifies suspicious usages of ``std::string_view::data()`` that could lead
+  to reading out-of-bounds data due to inadequate or incorrect string null
+  termination.
+
+- New :doc:`misc-use-internal-linkage
+  <clang-tidy/checks/misc/use-internal-linkage>` check.
+
+  Detects variables and functions that can be marked as static or moved into
+  an anonymous namespace to enforce internal linkage.
+
+- New :doc:`modernize-min-max-use-initializer-list
+  <clang-tidy/checks/modernize/min-max-use-initializer-list>` check.
+
+  Replaces nested ``std::min`` and ``std::max`` calls with an initializer list
+  where applicable.
+
+- New :doc:`cppcoreguidelines-prefer-at-over-subscript-operator
+  <clang-tidy/checks/cppcoreguidelines/prefer-at-over-subscript-operator>` check.
+
+  Flags the unsafe ``operator[]`` and suggests replacing it with ``at()``.
 
 
 Removed checks
