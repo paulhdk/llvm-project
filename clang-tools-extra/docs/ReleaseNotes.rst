@@ -142,8 +142,8 @@ Changes in existing checks
   Replaces nested ``std::min`` and ``std::max`` calls with an initializer list
   where applicable.
 
-- New :doc:`cppcoreguidelines-prefer-at-over-subscript-operator
-  <clang-tidy/checks/cppcoreguidelines/prefer-at-over-subscript-operator>` check.
+- New :doc:`cppcoreguidelines-pro-bounds-avoid-unchecked-container-accesses
+  <clang-tidy/checks/cppcoreguidelines/pro-bounds-avoid-unchecked-container-accesses>` check.
 
   Flags the unsafe ``operator[]`` and suggests replacing it with ``at()``.
 
