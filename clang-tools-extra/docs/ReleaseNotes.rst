@@ -145,7 +145,8 @@ Changes in existing checks
 - New :doc:`cppcoreguidelines-pro-bounds-avoid-unchecked-container-accesses
   <clang-tidy/checks/cppcoreguidelines/pro-bounds-avoid-unchecked-container-accesses>` check.
 
-  Flags the unsafe ``operator[]`` and suggests replacing it with ``at()``.
+  Flags the unsafe ``operator[]``. Can suggests fixing it with ``at()`` or a
+  user-provided function.
 
 
 Removed checks
