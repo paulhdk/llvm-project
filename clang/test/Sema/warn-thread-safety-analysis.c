@@ -180,6 +180,10 @@ int main(void) {
                                 // expected-note@-1{{mutex released here}}
   mutex_shared_unlock(&mu1);    // expected-warning {{releasing mutex 'mu1' that was not held}}
 
+  mutex_exclusive_lock(&mu1);   // expected-note {{mutex acquired here}}
+  struct Mutex muAlias = mu1;
+  mutex_exclusive_unlock(&muAlias); // expected-note {{mutex released here}}
+
   /// Cleanup functions
   {
     struct Mutex* const __attribute__((cleanup(unlock_scope))) scope = &mu1;
