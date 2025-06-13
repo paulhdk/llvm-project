@@ -24,19 +24,14 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/Type.h"
 #include "clang/Analysis/Analyses/PostOrderCFGView.h"
+#include "clang/Analysis/Analyses/ThreadSafety.h"
 #include "clang/Analysis/Analyses/ThreadSafetyTIL.h"
-#include "clang/Analysis/Analyses/ThreadSafetyTraverse.h"
 #include "clang/Analysis/Analyses/ThreadSafetyUtil.h"
 #include "clang/Analysis/AnalysisDeclContext.h"
 #include "clang/Analysis/CFG.h"
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/PointerUnion.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Casting.h"
-#include <sstream>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -59,43 +54,6 @@ class Stmt;
 class UnaryOperator;
 
 namespace threadSafety {
-
-// Various helper functions on til::SExpr
-namespace sx {
-
-inline bool equals(const til::SExpr *E1, const til::SExpr *E2) {
-  return til::EqualsComparator::compareExprs(E1, E2);
-}
-
-inline bool matches(const til::SExpr *E1, const til::SExpr *E2) {
-  // We treat a top-level wildcard as the "univsersal" lock.
-  // It matches everything for the purpose of checking locks, but not
-  // for unlocking them.
-  if (isa<til::Wildcard>(E1))
-    return isa<til::Wildcard>(E2);
-  if (isa<til::Wildcard>(E2))
-    return isa<til::Wildcard>(E1);
-
-  return til::MatchComparator::compareExprs(E1, E2);
-}
-
-inline bool partiallyMatches(const til::SExpr *E1, const til::SExpr *E2) {
-  const auto *PE1 = dyn_cast_or_null<til::Project>(E1);
-  if (!PE1)
-    return false;
-  const auto *PE2 = dyn_cast_or_null<til::Project>(E2);
-  if (!PE2)
-    return false;
-  return PE1->clangDecl() == PE2->clangDecl();
-}
-
-inline std::string toString(const til::SExpr *E) {
-  std::stringstream ss;
-  til::StdPrinter::print(E, ss);
-  return ss.str();
-}
-
-}  // namespace sx
 
 // This class defines the interface of a clang CFG Visitor.
 // CFGWalker will invoke the following methods.
@@ -265,84 +223,6 @@ private:
   CFG *CFGraph = nullptr;
   AnalysisDeclContext *ACtx = nullptr;
   PostOrderCFGView *SortedGraph = nullptr;
-};
-
-// TODO: move this back into ThreadSafety.cpp
-// This is specific to thread safety.  It is here because
-// translateAttrExpr needs it, but that should be moved too.
-class CapabilityExpr {
-private:
-  static constexpr unsigned FlagNegative = 1u << 0;
-  static constexpr unsigned FlagReentrant = 1u << 1;
-
-  /// The capability expression and flags.
-  llvm::PointerIntPair<const til::SExpr *, 2, unsigned> CapExpr;
-
-  /// The kind of capability as specified by @ref CapabilityAttr::getName.
-  StringRef CapKind;
-
-public:
-  CapabilityExpr() : CapExpr(nullptr, 0) {}
-  CapabilityExpr(const til::SExpr *E, StringRef Kind, bool Neg, bool Reentrant)
-      : CapExpr(E, (Neg ? FlagNegative : 0) | (Reentrant ? FlagReentrant : 0)),
-        CapKind(Kind) {}
-  // Infers `Kind` and `Reentrant` from `QT`.
-  CapabilityExpr(const til::SExpr *E, QualType QT, bool Neg);
-
-  // Don't allow implicitly-constructed StringRefs since we'll capture them.
-  template <typename T>
-  CapabilityExpr(const til::SExpr *, T, bool, bool) = delete;
-
-  const til::SExpr *sexpr() const { return CapExpr.getPointer(); }
-  StringRef getKind() const { return CapKind; }
-  bool negative() const { return CapExpr.getInt() & FlagNegative; }
-  bool reentrant() const { return CapExpr.getInt() & FlagReentrant; }
-
-  CapabilityExpr operator!() const {
-    return CapabilityExpr(CapExpr.getPointer(), CapKind, !negative(),
-                          reentrant());
-  }
-
-  bool equals(const CapabilityExpr &other) const {
-    return (negative() == other.negative()) &&
-           sx::equals(sexpr(), other.sexpr());
-  }
-
-  bool matches(const CapabilityExpr &other) const {
-    return (negative() == other.negative()) &&
-           sx::matches(sexpr(), other.sexpr());
-  }
-
-  bool matchesUniv(const CapabilityExpr &CapE) const {
-    return isUniversal() || matches(CapE);
-  }
-
-  bool partiallyMatches(const CapabilityExpr &other) const {
-    return (negative() == other.negative()) &&
-           sx::partiallyMatches(sexpr(), other.sexpr());
-  }
-
-  const ValueDecl* valueDecl() const {
-    if (negative() || sexpr() == nullptr)
-      return nullptr;
-    if (const auto *P = dyn_cast<til::Project>(sexpr()))
-      return P->clangDecl();
-    if (const auto *P = dyn_cast<til::LiteralPtr>(sexpr()))
-      return P->clangDecl();
-    return nullptr;
-  }
-
-  std::string toString() const {
-    if (negative())
-      return "!" + sx::toString(sexpr());
-    return sx::toString(sexpr());
-  }
-
-  bool shouldIgnore() const { return sexpr() == nullptr; }
-
-  bool isInvalid() const { return isa_and_nonnull<til::Undefined>(sexpr()); }
-
-  bool isUniversal() const { return isa_and_nonnull<til::Wildcard>(sexpr()); }
 };
 
 // Translate clang::Expr to til::SExpr.
